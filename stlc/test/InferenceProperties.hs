@@ -1,0 +1,76 @@
+{-# OPTIONS_GHC -Wno-orphans #-}
+module InferenceProperties (test_inference_properties) where
+
+import Parser qualified as Expr (Expr (..))
+import Parser (Expr, Literal(..), Op(..))
+import Test.QuickCheck
+import Type.Inference
+import Control.Monad.State
+import Control.Monad.Except
+
+genVarName :: Gen String
+genVarName = elements $ map (\(a, b) -> show a ++ show b) $ zip ['a'..'z'] [0..]
+
+--import Type.Inference (instantiate, unify, generalize, w)
+--
+instance Arbitrary Type where
+    arbitrary = oneof
+        [ elements [Int, Bool]
+        , Var <$> genVarName
+        , Arrow <$> arbitrary <*> arbitrary
+        , scheme
+        ]
+        where
+            scheme = do
+                arrow <- Arrow <$> arbitrary <*> arbitrary
+                let vars = free_vars arrow
+                return $ Scheme vars arrow
+
+instance Arbitrary Literal where
+    arbitrary = oneof
+        [ LitInt . abs <$> arbitrary
+        , LitBool <$> arbitrary
+        ]
+
+instance Arbitrary Op where
+    arbitrary = elements [ Add, Subtract, And, Or ]
+
+
+instance Arbitrary Expr where
+    arbitrary = oneof
+        [ Expr.Lit <$> arbitrary
+        , Expr.Var <$> arbitrary
+        , Expr.Let <$> arbitrary <*> arbitrary <*> arbitrary
+        , Expr.BinOp <$> arbitrary <*> arbitrary <*> arbitrary
+        , Expr.App <$>arbitrary <*> arbitrary
+        , Expr.If <$> arbitrary <*> arbitrary <*> arbitrary
+        ]
+
+
+prop_generalize_arrow_types_to_schemes :: Property
+prop_generalize_arrow_types_to_schemes = forAll (arbitrary :: Gen Type) $ \n ->
+    case (n, generalize n) of
+        (Arrow _ _, Scheme _ _) -> property True
+        (_, Scheme _ _) | n /= generalize n -> counterexample ("Type " ++ show n ++ " should not generalize") False
+        (t, t') | t /= t' -> counterexample ("Type " ++ show n ++ " changed to type " ++ show t') False
+        (_, _) -> property True
+
+prop_instantiate_non_scheme_is_identity :: Property
+prop_instantiate_non_scheme_is_identity = forAll (arbitrary :: Gen Type) $ \n -> do
+    let result = evalState (runExceptT $ instantiate n) 0
+    case (n, result) of
+        (Scheme _ _, Right (Arrow _ _)) -> property True
+        (Scheme _ _, Right t) -> counterexample ("Type " ++ show t ++ " was improperly generalized") False
+        (t, Right t') | t == t' -> property True
+        (_, _) -> counterexample ("Type " ++ show n ++ " should not be instantiated") False
+
+
+
+test_inference_properties :: IO()
+test_inference_properties = do
+    putStrLn "\n Only Arrows generalize to Schemes. Identity otherwise"
+    quickCheck prop_generalize_arrow_types_to_schemes
+
+    putStrLn "\n Instantiation is the identity on Mono types."
+    quickCheck prop_instantiate_non_scheme_is_identity
+
