@@ -6,7 +6,6 @@ import Data.Map(Map)
 import Control.Monad.State
 import Control.Monad.Except
 
-
 --- Represents a runtime value
 data Value =
     RInt Integer
@@ -16,7 +15,6 @@ data Value =
 
 --- Mapping of variables to runtime values
 type Env = Map String Value
-
 
 data EvaluationError =
     Error String
@@ -48,17 +46,28 @@ isolated action = do
 liftMaybe :: MonadError e m => e -> Maybe a -> m a
 liftMaybe err = maybe (throwError err) return
 
-eval_expr :: Expr -> Except EvaluationError Value
-eval_expr expr = runState (runExceptT eval expr) Map.empty
 
+eval_expr :: Expr -> Either EvaluationError Value
+eval_expr expr = evalState s Map.empty
+    where
+        s = runExceptT $ eval expr
+
+evalWithEnv :: Env -> Expr -> Either EvaluationError Value
+evalWithEnv env expr = evalState (runExceptT $ eval expr) env
+
+--- >>> evalWithEnv (Map.fromList [("a", RInt 1)]) (Var "a")
+-- Right (RInt 1)
 eval :: Expr -> Eval Value
 eval (Var a) = valueOf a
 
+--- >>> evalWithEnv (Map.fromList []) (Lambda "x" Nothing (Lit $ LitInt 1))
+-- Right (RFunc "x" (Lit (LitInt 1)))
 eval (Lambda name _ body) = do
-    env <- get
     let value = RFunc name body
     return value
 
+--- >>> evalWithEnv (Map.fromList []) (BinOp Add (Lit $ LitInt 1) (Lit $ LitInt 1))
+-- Right (RInt 2)
 eval (BinOp op left right) = do
     lvalue <- eval left
     rvalue <- eval right
@@ -70,9 +79,16 @@ eval (BinOp op left right) = do
         (Or, RBool l, RBool r) -> Just $ RBool (l || r)
         _ -> Nothing
 
+--- >>> evalWithEnv (Map.fromList []) (Lit $ LitBool True)
+-- Right (RBool True)
 eval (Lit (LitBool b)) = return $ RBool b
+
+--- >>> evalWithEnv (Map.fromList []) (Lit $ LitInt 1)
+-- Right (RInt 1)
 eval (Lit (LitInt i)) = return $ RInt i
 
+--- >>> evalWithEnv (Map.fromList []) (Let "foo" (Lit $ LitInt 1) (BinOp Add (Var "foo") (Lit $ LitInt 1)))
+-- Right (RInt 2)
 eval (Let name assign body) = do
     env <- get
     assign_value <- eval assign
@@ -80,12 +96,16 @@ eval (Let name assign body) = do
 
     eval body
 
+--- >>> evalWithEnv (Map.fromList []) (If (Lit $ LitBool True) (Lit $ LitInt 1) (Lit $ LitInt 2))
+-- Right (RInt 1)
 eval (If cond l_expr r_expr) = eval cond >>= \case
         RBool True -> eval l_expr
         RBool False -> eval r_expr
 
         _ -> throwError (Error "Oops")
 
+--- >>> evalWithEnv (Map.fromList [("add", (RFunc "x" (BinOp Add (Var "x") (Lit $ LitInt 2) )))]) (App (Var "add") (Lit $ LitInt 3))
+-- Right (RInt 5)
 eval (App f arg) = do
     f_value <- eval f
     arg_v <- eval arg
@@ -99,12 +119,3 @@ eval (App f arg) = do
                 _ -> throwError (Error "oops")
 
     isolated get_return_action
-
-
-
-
-
-
-
-
-
