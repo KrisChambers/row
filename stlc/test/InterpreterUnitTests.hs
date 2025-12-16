@@ -8,10 +8,3 @@ import Utils
 
 import Interpreter
 
-test_literal :: Test
-test_literal = TestList
-    [ TestCase $ assert
-
-allTests :: Test
-    [ TestLabel "Literal tests" test_literal
-    ]

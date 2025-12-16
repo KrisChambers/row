@@ -30,9 +30,9 @@ data TypeError =
     UnificationError String
     deriving (Show)
 
--- A substitution.
--- We make this a Monoid to more easily handle [Substitution] -> Substituion
--- through composing Substitutions
+{- | A substitution.
+ - We make this a Monoid to more easily handling [Substitution] -> Substituion through composing Substitutions
+-}
 data Substitution = IdSub | Single (Type, String) | Composed [Substitution]
     deriving (Show)
 
@@ -142,14 +142,14 @@ generalize t = case t of
     Arrow _ _ -> Scheme (free_vars t) t
     _ -> t
 
-liftEither :: Monad m => Either e a -> ExceptT e m a
-liftEither = ExceptT . return
+--liftEither :: Monad m => Either e a -> ExceptT e m a
+--liftEither = ExceptT . return
 
 liftMaybe :: MonadError e m => e -> Maybe a -> m a
 liftMaybe err = maybe (throwError err) return
 
-handleResult :: MonadError e m => Either e a -> m a
-handleResult = either throwError return
+-- handleResult :: MonadError e m => Either e a -> m a
+-- handleResult = either throwError return
 
 
 handleUnificationError :: MonadError TypeError m => String -> Maybe a -> m a
@@ -170,13 +170,15 @@ infer_type expr =
             Right (_, t) -> Right t
 
 
---- Implementation of Algorithm W for hindley milner type inference.
+-- | Implementation of Algorithm W for hindley milner type inference.
+-- >>> evalState (runExceptT (w (Map.insert "a" Int initialEnv) (Expr.Var "a"))) 0
+-- Right (IdSub,Int)
 w :: TypeEnv -> Expr -> Infer (Substitution, Type)
-w env (Expr.Var name) = fmap (IdSub, ) $ liftMaybe (InferenceError ("Could not find type for term " ++ show name)) (env !? name)
+w env (Expr.Var name) =  fmap (IdSub, ) $ liftMaybe (InferenceError ("Could not find type for term " ++ show name)) (env !? name)
 
 w env (Expr.Lambda var_name _ expr) = do
-    (_, u) <- extendWithVar env var_name
-    (s, t) <- w env expr
+    (new_env, u) <- extendWithVar env var_name
+    (s, t) <- w new_env expr
 
     return $ (s, Arrow (apply s u) t)
 

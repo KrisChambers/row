@@ -26,7 +26,8 @@ module Parser (
     parse_binary_expr,
     parse_if,
     parse_application,
-    parse_program
+    parse_program,
+    parse_all
 
 ) where
 
@@ -52,6 +53,8 @@ data Expr =
     | Let String Expr Expr
     deriving (Show, Eq, Ord)
 
+parse_all :: String -> Either ParseError Expr
+parse_all s = parse parse_program "" s
 
 parse_program :: Parser Expr
 parse_program = do

@@ -64,6 +64,7 @@ library
         Parser,
         Type,
         Type.Inference,
+        Type.Substitution,
         Interpreter
 
     -- Modules included in this library but not exported.

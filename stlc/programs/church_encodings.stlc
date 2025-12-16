@@ -1,0 +1,4 @@
+let main = and tru fls;
+let tru = \x -> \s -> x;
+let fls = \t -> \u -> u;
+let and = \a -> \b -> a b fls;

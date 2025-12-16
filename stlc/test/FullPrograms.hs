@@ -8,13 +8,13 @@ full_programs =
             "let b = if (id True) then (id 10) else (id 20)\n",
             "let c = id False"
         ])
-    , ("nested poymorphic let bindings", unlines [
-        "let f = \\x -> x\n",
-        "let g = \\y -> f y\n",
-        "let h = \\z -> g z\n",
-        "let test1 = h 42\n",
-        "let test2 = h True\n"
-      ])
+    , ("nested poymorphic let bindings", "\n\
+        \let f = \\x -> x\n\
+        \let g = \\y -> f y\n\
+        \let h = \\z -> g z\n\
+        \let test1 = h 42\n\
+        \let test2 = h True\n"
+      )
     , ("apply polymorphic argument to function", unlines [
         "let apply = \\f -> \\x -> f x\n",
         "let id = \\y -> y\n",
@@ -55,6 +55,4 @@ full_programs =
         "let f = choose True\n",
         "let final = f 42"
       ])
-
--- TODO FInish this
     ]
