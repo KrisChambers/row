@@ -85,6 +85,9 @@ test_parse_expr = TestList
 test_parse_lambda :: Test
 test_parse_lambda = TestList
     [ TestCase $ assertParseSuccess "parse_lambda parses \\x -> x" parse_lambda "\\x -> x" (Lambda "x" Nothing (Var "x"))
+    , TestCase $ assertParseSuccess "parse_lambda parses \\x -> x" parse_lambda "\\x -> \\y -> \\z -> x" (
+            Lambda "x" Nothing (Lambda "y" Nothing (Lambda "z" Nothing (Var "x")))
+        )
     ]
 
 test_parse_let :: Test

@@ -1,0 +1,2 @@
+let add2 = \x -> x + 2;
+let main = add2 5

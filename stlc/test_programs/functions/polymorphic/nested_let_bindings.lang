@@ -1,0 +1,7 @@
+let f = \x -> x;
+let g = \y -> f y;
+let h = \z -> g z;
+let main = if h true then h 42 else h 24
+
+
+

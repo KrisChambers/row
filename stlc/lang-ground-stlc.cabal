@@ -123,7 +123,9 @@ test-suite lang-ground-stlc-test
                     InferenceUnitTests,
                     FullPrograms,
                     Utils,
-                    InterpreterUnitTests
+                    InterpreterUnitTests,
+                    TestSpec,
+                    TestRunner
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
@@ -144,4 +146,8 @@ test-suite lang-ground-stlc-test
         HUnit >= 1.6,
         lang-ground-stlc,
         parsec,
-        mtl
+        mtl,
+        tomland >= 1.3,
+        directory,
+        filepath,
+        text

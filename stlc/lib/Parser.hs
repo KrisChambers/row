@@ -33,6 +33,7 @@ module Parser (
 
 import Text.Parsec
 import Text.Parsec.String(Parser)
+import Debug.Trace qualified as Tr
 
 data TypeAnn = Int | Bool | Fn TypeAnn TypeAnn
     deriving(Show, Eq, Ord)
@@ -64,10 +65,16 @@ parse_program = do
             Let name value _ -> (name, value)
             _ -> error ("Invalid")
 
+
     let assignments = map get_let_info lets
-    let last_var = fst $ last assignments
+
+    let last_var = if any (\ (name, _) -> name == "main") assignments
+        then Var "main"
+        else error ("Missing main")
+
+    -- let last_var = fst $ last assignments
     let accumulate = \acc (name, expr) -> Let name expr acc
-    let result = foldl' accumulate (Var last_var) (reverse assignments)
+    let result = foldl' accumulate last_var (reverse assignments)
 
     return result
 
@@ -159,7 +166,6 @@ parse_let_assignment = do
     expr <- opt_space >> parse_expr
 
     return $ (var, expr)
-
 
 parse_let_assignment_list :: Parser [(String, Expr)]
 parse_let_assignment_list = parse_let_assignment `sepBy1` (try(opt_space >> char ','))

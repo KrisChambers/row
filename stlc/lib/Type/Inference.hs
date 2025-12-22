@@ -17,9 +17,17 @@ import Parser (Expr, Literal(LitBool, LitInt), Op(Add, Subtract , Or, And))
 import Parser qualified as Expr (Expr (..))
 import Control.Monad.State
 import Control.Monad.Except
-import Data.Set as Set
+import Data.Set qualified as Set
+import Data.Set (Set)
 import Data.Map qualified as Map
 import Data.Map(Map, (!?))
+import Debug.Trace qualified as Tr
+
+enableTrace :: Bool
+enableTrace = True
+
+traceM :: Applicative f => String -> f ()
+traceM message = if enableTrace then Tr.traceM message else pure ()
 
 data Type = Int | Bool | Var String | Arrow Type Type | Scheme (Set String) Type
     deriving (Show, Ord, Eq)
@@ -90,11 +98,9 @@ extendWithVar env name = do
 
 -- The type of some binary function
 binaryType :: Type
-binaryType = Scheme (Set.fromList ["binary_var"]) (
-    Arrow
-        ( Var "binary_var" )
-        ( Var "binary_var" )
-    )
+binaryType = Scheme (Set.fromList ["binary_var"]) ( Arrow t_var (Arrow t_var t_var))
+    where
+        t_var = Var "binary_var"
 
 free_vars :: Type -> Set String
 free_vars t = case t of
@@ -158,6 +164,7 @@ handleUnificationError err = liftMaybe (UnificationError err)
 initialEnv :: TypeEnv
 initialEnv = Map.fromList [("binary", binaryType)]
 
+-- TODO (kc): We need to be able to pull out the top level lets here.
 infer_type :: Expr -> Either TypeError Type
 infer_type expr =
     let
@@ -169,6 +176,47 @@ infer_type expr =
             Left e -> Left e
             Right (_, t) -> Right t
 
+prettyPrint :: Expr -> String
+prettyPrint = \case
+    Expr.Var name -> show name
+    Expr.Lambda name _ body -> "\\" ++ name ++ " -> " ++ prettyPrint body
+    Expr.App e1 e2 -> "( " ++ prettyPrint e1 ++ " ) ( " ++ prettyPrint e2 ++ " )"
+    Expr.BinOp op left right -> "( " ++ prettyPrint left ++ " ) " ++ opStr ++ " ( " ++ prettyPrint right ++ " )"
+        where
+            opStr = case op of
+                Add -> "+"
+                Subtract -> "-"
+                And -> "&&"
+                Or -> "||"
+    Expr.If cond tru fls -> "If " ++ prettyPrint cond ++ " then " ++ prettyPrint tru ++ " else " ++ prettyPrint fls
+    Expr.Let var assign body -> "let \n\t" ++ var ++ " = " ++ prettyPrint assign ++ "\nin\n\t" ++ prettyPrint body
+    Expr.Lit lit -> show lit
+
+prettyPrintEnv :: TypeEnv -> String
+prettyPrintEnv env =
+    let
+        newline = "\n"
+        printPair name typ = name ++ " >> " ++ prettyPrintType typ
+        ln = Prelude.map (uncurry printPair) (Map.toList env)
+        folder a s = a ++ newline ++ s
+    in
+        if Map.null env
+            then ""
+            else foldl' folder (head ln) (tail ln)
+
+
+prettyPrintType :: Type -> String
+prettyPrintType = \case
+    Var name -> show name
+    Arrow a b -> "(" ++ prettyPrintType a ++ ") -> (" ++ prettyPrintType b ++ ")"
+    Scheme vars t -> "forall " ++ var_list ++ ". " ++ prettyPrintType t
+        where
+            list_folder a b = a ++ ", " ++ b
+            vs = Set.elems vars
+            var_list = if Set.null vars
+                then ""
+                else foldl' list_folder (head vs) (tail vs)
+    t -> show t
 
 -- | Implementation of Algorithm W for hindley milner type inference.
 -- >>> evalState (runExceptT (w (Map.insert "a" Int initialEnv) (Expr.Var "a"))) 0
@@ -178,9 +226,11 @@ w env (Expr.Var name) =  fmap (IdSub, ) $ liftMaybe (InferenceError ("Could not 
 
 w env (Expr.Lambda var_name _ expr) = do
     (new_env, u) <- extendWithVar env var_name
+    traceM $ "\nNEW_ENV :\n" ++ prettyPrintEnv new_env
     (s, t) <- w new_env expr
-
+    traceM $ "TYPED " ++ prettyPrint expr ++ " : " ++ prettyPrintType t
     return $ (s, Arrow (apply s u) t)
+
 
 w env (Expr.App e1 e2) = do
     (s1, t1) <- w env e1 -- Get the type of e1
@@ -191,15 +241,17 @@ w env (Expr.App e1 e2) = do
     f <- nextFreshVar
     let fresh = Var f
     it2 <- instantiate t2
+
+    let arrow_t = Arrow it2 fresh -- We want to create a type t2 -> u :: A type that takes something of type t2 to some new type u
+
     it1 <- instantiate t1
     let s = s1 <> s2
     let f_t1 = apply s it1 -- Instantiate the types and apply any substitutions to t1
-
-    let arrow_t = Arrow it2 fresh -- We want to create a type t2 -> u :: A type that takes something of type t2 to some new type u
-    let f_arrow_t = apply s arrow_t
+    let f_arrow_t = apply s arrow_t -- NOTE(kc): Probably don't need this
 
     s3 <- (unify f_t1 f_arrow_t) >>= liftMaybe (UnificationError ("Could not unify " ++ show f_t1 ++ " and " ++ show f_arrow_t)) -- Then we try and unify t1 and t2 -> u
     let ss = s3 <> s
+
     return $ (ss , apply ss fresh)
 
 w _ (Expr.Lit x) = do
@@ -210,7 +262,9 @@ w _ (Expr.Lit x) = do
 
 w env (Expr.Let var_name e1 e2) = do
     (new_env, a) <- extendWithVar env var_name
+    traceM $ "\nLET ASSIGNMENT VAR :: " ++ show a
     (s1, t1) <- w new_env e1
+    traceM $ "LET ASSIGNMENT " ++ prettyPrint e1 ++ " :: " ++ prettyPrintType t1
 
     let gen_t1 = generalize t1
     inst_t1 <- instantiate t1
@@ -238,6 +292,7 @@ w env (Expr.BinOp op e1 e2) = do
     s4 <- (unify (apply s t2) expected_t) >>= handleUnificationError ("Could not unify " ++ show t2 ++ " and " ++ show expected_t)
 
     let s' = s4 <> s3 <> s
+
     (s5, t) <- w (Map.map (apply s') env) desugared
     let s'' = s5 <> s'
 
@@ -262,7 +317,7 @@ getFreshVarMap :: Set String -> Infer (Map String String)
 getFreshVarMap vars = do
     let getValue = \v -> do
             new_var <- nextFreshVar
-            return $ (v, new_var)
+            return $ (new_var, v)
 
     fmap Map.fromList $ mapM getValue (Set.toList vars)
 
@@ -270,6 +325,7 @@ instantiate :: Type -> Infer Type
 instantiate (Scheme vars base) = do
     new_vars <- getFreshVarMap vars
     let s = foldMap (uncurry (createSub.Var)) $ Map.toList new_vars
+
     return $ apply s base
 instantiate t = pure t
 
