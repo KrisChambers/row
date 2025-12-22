@@ -1,6 +1,7 @@
-module InferenceUnitTests (unitTestInference) where
+module InferenceUnitTests (allTests) where
 
-import Test.HUnit
+import Test.Tasty
+import Test.Tasty.HUnit
 import Type.Inference (Type)
 import Type.Inference qualified as T (Type(..), infer_type)
 import Parser (Expr(..), Literal(..), Op(..))
@@ -20,46 +21,28 @@ assertInferenceError testName expr =
             Right t -> assertFailure $ testName ++ ": Expected inference to fail, but got: " ++ show t
 
 -- Tests for variable type inference
-test_variable_inference :: Test
-test_variable_inference = TestList
-    [ TestCase $ assertInferenceError
-        "undefined variable gives error"
-       (Var "undefined_var")
-    , TestCase $ assertInfersType
-        "let-bound Int variable has type Int"
-        (Let "x" (Lit (LitInt 42)) (Var "x"))
-        T.Int
-    , TestCase $ assertInfersType
-        "let-bound Bool variable has type Bool"
-        (Let "b" (Lit (LitBool True)) (Var "b"))
-        T.Bool
-    , TestCase $ assertInfersType
-        "nested let shadows outer variable"
-        (Let "x" (Lit (LitInt 1)) (Let "x" (Lit (LitBool False)) (Var "x")))
-        T.Bool
+test_variable_inference :: TestTree
+test_variable_inference = testGroup "Variable Inference"
+    [ testCase "undefined variable gives error" $
+        assertInferenceError "undefined variable" (Var "undefined_var")
+    , testCase "let-bound Int variable has type Int" $
+        assertInfersType "let-bound Int" (Let "x" (Lit (LitInt 42)) (Var "x")) T.Int
+    , testCase "let-bound Bool variable has type Bool" $
+        assertInfersType "let-bound Bool" (Let "b" (Lit (LitBool True)) (Var "b")) T.Bool
+    , testCase "nested let shadows outer variable" $
+        assertInfersType "nested let" (Let "x" (Lit (LitInt 1)) (Let "x" (Lit (LitBool False)) (Var "x"))) T.Bool
     ]
 
-test_lambda_expression :: Test
-test_lambda_expression = TestList
-    [ TestCase $ assertInfersType
-        "Infer identity function type"
-        (Lambda "x" Nothing (Var "x"))
-        (T.Arrow (T.Var "v1") (T.Var "v1"))
-    , TestCase $ assertInfersType
-        "Infers correct type of arrow variable forced from body"
-        (Lambda "x" Nothing (BinOp Add (Var "x") (Lit $ LitInt 2)))
-        (T.Arrow T.Int T.Int)
+test_lambda_expression :: TestTree
+test_lambda_expression = testGroup "Lambda Inference"
+    [ testCase "Infer identity function type" $
+        assertInfersType "identity" (Lambda "x" Nothing (Var "x")) (T.Arrow (T.Var "v1") (T.Var "v1"))
+    , testCase "Infers correct type of arrow variable forced from body" $
+        assertInfersType "arrow from body" (Lambda "x" Nothing (BinOp Add (Var "x") (Lit $ LitInt 2))) (T.Arrow T.Int T.Int)
     ]
 
-
-
-allTests :: Test
-allTests = TestList
-    [ TestLabel "Variable inference tests" test_variable_inference
-    , TestLabel "Lambda inference tests" test_lambda_expression
+allTests :: TestTree
+allTests = testGroup "Inference Unit Tests"
+    [ test_variable_inference
+    , test_lambda_expression
     ]
-
-unitTestInference :: IO Counts
-unitTestInference = do
-    putStrLn "\n --- Running Inference Unit Tests ---"
-    runTestTT allTests

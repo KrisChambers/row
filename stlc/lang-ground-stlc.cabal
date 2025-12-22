@@ -142,8 +142,9 @@ test-suite lang-ground-stlc-test
     -- Test dependencies.
     build-depends:
         base ^>=4.21.0.0,
-        QuickCheck >= 2.14,
-        HUnit >= 1.6,
+        tasty >= 1.4,
+        tasty-hunit >= 0.10,
+        tasty-quickcheck >= 0.10,
         lang-ground-stlc,
         parsec,
         mtl,

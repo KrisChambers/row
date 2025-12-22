@@ -2,7 +2,8 @@ module TestRunner (runFileTests) where
 
 import System.Directory (listDirectory, doesDirectoryExist, doesFileExist)
 import System.FilePath ((</>), takeExtension, dropExtension)
-import Test.HUnit
+import Test.Tasty
+import Test.Tasty.HUnit
 import Data.List (isInfixOf)
 import qualified Data.Text as T
 
@@ -42,8 +43,8 @@ discoverTests dir = do
             then pure [(langPath, testPath)]
             else pure []
 
-runTest :: TestSpec -> String -> FilePath -> Test
-runTest spec source langPath = TestLabel (T.unpack (tsName spec) ++ "(" ++ langPath ++ ")") $ TestCase $ do
+runTest :: TestSpec -> String -> FilePath -> TestTree
+runTest spec source langPath = testCase (T.unpack (tsName spec) ++ " (" ++ langPath ++ ")") $ do
     case tsPhase spec of
         Parse     -> checkParse spec source
         TypeCheck -> checkTypeCheck spec source
@@ -102,24 +103,22 @@ checkErrorContains (Just substr) err =
     assertBool ("Error should contain '" ++ T.unpack substr ++ "' but got: " ++ err)
                (T.unpack substr `isInfixOf` err)
 
-buildTestTree :: FilePath -> IO Test
+buildTestTree :: FilePath -> IO TestTree
 buildTestTree dir = do
     pairs <- discoverTests dir
     if null pairs
-        then pure $ TestList []
+        then pure $ testGroup "File-based tests" []
         else do
             tests <- mapM loadAndRunTest pairs
-            pure $ TestLabel "File-based tests" $ TestList tests
+            pure $ testGroup "File-based tests" tests
   where
     loadAndRunTest (langPath, testPath) = do
         source <- readFile langPath
         specResult <- loadTestSpec testPath
         case specResult of
-            Left err -> pure $ TestLabel langPath $ TestCase $
+            Left err -> pure $ testCase langPath $
                 assertFailure $ "Failed to load test spec: " ++ err
             Right spec -> pure $ runTest spec source langPath
 
-runFileTests :: IO Counts
-runFileTests = do
-    tests <- buildTestTree "test_programs"
-    runTestTT tests
+runFileTests :: IO TestTree
+runFileTests = buildTestTree "test_programs"

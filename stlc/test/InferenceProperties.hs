@@ -3,7 +3,8 @@ module InferenceProperties (test_inference_properties) where
 
 import Parser qualified as Expr (Expr (..))
 import Parser (Expr, Literal(..), Op(..))
-import Test.QuickCheck
+import Test.Tasty
+import Test.Tasty.QuickCheck
 import Type.Inference
 import Control.Monad.State
 import Control.Monad.Except
@@ -65,12 +66,8 @@ prop_instantiate_non_scheme_is_identity = forAll (arbitrary :: Gen Type) $ \n ->
         (_, _) -> counterexample ("Type " ++ show n ++ " should not be instantiated") False
 
 
-
-test_inference_properties :: IO()
-test_inference_properties = do
-    putStrLn "\n Only Arrows generalize to Schemes. Identity otherwise"
-    quickCheck prop_generalize_arrow_types_to_schemes
-
-    putStrLn "\n Instantiation is the identity on Mono types."
-    quickCheck prop_instantiate_non_scheme_is_identity
-
+test_inference_properties :: TestTree
+test_inference_properties = testGroup "Inference Properties"
+    [ testProperty "Only arrows generalize to schemes" prop_generalize_arrow_types_to_schemes
+    , testProperty "Instantiation is identity on mono types" prop_instantiate_non_scheme_is_identity
+    ]

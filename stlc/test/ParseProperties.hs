@@ -1,6 +1,7 @@
 module ParseProperties (test_parser_properties) where
 
-import Test.QuickCheck
+import Test.Tasty
+import Test.Tasty.QuickCheck
 import Parser
 import qualified Text.Parsec as P
 
@@ -95,21 +96,12 @@ prop_leading_zeros_are_handled = forAll(choose (0, 999) :: Gen Integer) $ \n ->
         Right _ -> property True
 
 
-test_parser_properties :: IO()
-test_parser_properties = do
-    putStrLn "\nTesting literal parsing..."
-
-    putStrLn "\nTesting valid inputs..."
-    quickCheck prop_literal_parses_valid_input
-
-    putStrLn "\nTesting invalid literals fail..."
-    quickCheck prop_invalid_literals_fail
-
-    putStrLn "\nTest integer literals parsed correctly"
-    quickCheck prop_int_literal_has_correct_value
-
-    putStrLn "\nTesting leading zeros are handled..."
-    quickCheck prop_leading_zeros_are_handled
-
-    putStrLn ""
-
+test_parser_properties :: TestTree
+test_parser_properties = testGroup "Parser Properties"
+    [ testProperty "valid literals parse" prop_literal_parses_valid_input
+    , testProperty "invalid literals fail" prop_invalid_literals_fail
+    , testProperty "int literal correct value" prop_int_literal_has_correct_value
+    , testProperty "leading zeros handled" prop_leading_zeros_are_handled
+    , testProperty "literal roundtrip" prop_literal_roundtrip
+    , testProperty "bool literal correct value" prop_bool_literal_correct_value
+    ]
