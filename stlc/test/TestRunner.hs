@@ -64,7 +64,7 @@ checkParse spec source = case P.parse_all source of
 checkTypeCheck :: TestSpec -> String -> Assertion
 checkTypeCheck spec source = case P.parse_all source of
     Left err -> assertFailure $ "Parse failed: " ++ show err
-    Right expr -> case TI.infer_type expr of
+    Right expr -> case TI.inferType expr of
         Left err ->
             if tsExpect spec == Failure
                 then checkErrorContains (tsErrorContains spec) (show err)
@@ -79,7 +79,7 @@ checkTypeCheck spec source = case P.parse_all source of
 checkEval :: TestSpec -> String -> Assertion
 checkEval spec source = case P.parse_all source of
     Left err -> assertFailure $ "Parse failed: " ++ show err
-    Right expr -> case TI.infer_type expr of
+    Right expr -> case TI.inferType expr of
         Left err -> assertFailure $ "Type error: " ++ show err
         Right typ -> case I.eval_expr expr of
             Left err ->
@@ -89,12 +89,12 @@ checkEval spec source = case P.parse_all source of
             Right value ->
                 if tsExpect spec == Success
                     then do
-                        case tsExpectedType spec of
-                            Nothing -> pure ()
-                            Just expected -> assertEqual "Type mismatch" (T.unpack expected) (show typ)
                         case tsExpectedValue spec of
                             Nothing -> pure ()
                             Just expected -> assertEqual "Value mismatch" (T.unpack expected) (show value)
+                        case tsExpectedType spec of
+                                Nothing -> pure ()
+                                Just expected -> assertEqual ("Type mismatch \n\n" ++ show source ++ "\n\n" ++ show expr) (T.unpack expected) (show typ)
                     else assertFailure "Expected failure but eval succeeded"
 
 checkErrorContains :: Maybe T.Text -> String -> Assertion

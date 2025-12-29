@@ -1,0 +1,4 @@
+name = "Church Encoding Example 1"
+phase = "eval"
+expect = "success"
+expected_value = "Lambda \"x\" Nothing (Lambda \"y\" Nothing (Var \"y\"))"

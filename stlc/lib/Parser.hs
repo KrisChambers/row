@@ -54,6 +54,7 @@ data Expr =
     | Let String Expr Expr
     deriving (Show, Eq, Ord)
 
+
 parse_all :: String -> Either ParseError Expr
 parse_all s = parse parse_program "" s
 

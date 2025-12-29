@@ -3,20 +3,20 @@ module InferenceUnitTests (allTests) where
 import Test.Tasty
 import Test.Tasty.HUnit
 import Type.Inference (Type)
-import Type.Inference qualified as T (Type(..), infer_type)
+import Type.Inference qualified as T (Type(..), inferType)
 import Parser (Expr(..), Literal(..), Op(..))
 
 -- Helper to assert type inference succeeds with expected type
 assertInfersType :: String -> Expr -> Type -> Assertion
 assertInfersType testName expr expected =
-    case T.infer_type expr of
+    case T.inferType expr of
                 Left err -> assertFailure $ testName ++ ": Inference failed with error: " ++ show err
-                Right result -> assertEqual testName expected result
+                Right t -> assertEqual testName expected t
 
 -- Helper to assert type inference fails
 assertInferenceError :: String -> Expr -> Assertion
 assertInferenceError testName expr =
-    case T.infer_type expr of
+    case T.inferType expr of
             Left _ -> return ()
             Right t -> assertFailure $ testName ++ ": Expected inference to fail, but got: " ++ show t
 
@@ -46,3 +46,7 @@ allTests = testGroup "Inference Unit Tests"
     [ test_variable_inference
     , test_lambda_expression
     ]
+
+generateConstraints :: TestTree
+generateConstraints = testGroup "Simple Constraint Generation"
+    [ ]

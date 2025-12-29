@@ -13,6 +13,21 @@ enableTrace = False
 traceM :: Applicative f => String -> f ()
 traceM s = if enableTrace then Tr.traceM s else pure ()
 
+{- BUG (kc):
+ -      There is a scoping bug
+ -          let flip = \f -> \x -> y -> f y x;
+ -          let sub = \x -> \y -> x - y;
+ -          let flippedSub = flip sub
+ -          let main = flippedSub 5 10
+ -
+ -      This should be 10 - 5 = 5
+ -      But we are getting -5
+ -
+ -      It is fixed if we use
+ -          let sub = \a -> \b -> a - b;
+ -
+ -}
+
 --- Represents a runtime value
 data Value =
     RInt Integer
@@ -57,8 +72,8 @@ eval_expr expr = evalState s Map.empty
     where
         s = runExceptT $ eval expr
 
-evalWithEnv :: Env -> Expr -> Either EvaluationError Expr
-evalWithEnv env expr = evalState (runExceptT $ eval expr) env
+-- evalWithEnv :: Env -> Expr -> Either EvaluationError Expr
+-- evalWithEnv env expr = evalState (runExceptT $ eval expr) env
 
 substitute :: Expr -> Eval Expr
 substitute (Var a) = do

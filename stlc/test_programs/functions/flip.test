@@ -1,0 +1,5 @@
+name = "Flip Arguments"
+phase = "eval"
+expect = "success"
+expected_type = "Int"
+expected_value = "Lit (LitInt 5)"
