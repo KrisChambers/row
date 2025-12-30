@@ -21,7 +21,7 @@ import Control.Monad.Except
 import Data.Set qualified as Set
 import Data.Set (Set)
 import Data.Map qualified as Map
-import Data.Map(Map, (!))
+import Data.Map(Map, (!), (!?))
 import Debug.Trace qualified as Tr
 
 enableTrace :: Bool
@@ -29,6 +29,8 @@ enableTrace = False
 
 traceM :: Applicative f => String -> f ()
 traceM message = when enableTrace $ Tr.traceM message
+
+
 
 --- Basic Types
 data Type = Int | Bool | Var String | Arrow Type Type | Scheme (Set Type) Type
@@ -109,8 +111,12 @@ infer env = \case
     -- NOTE (kc): This fails with an error if there is a scoping problem.
     --            This is a bug so it is fine
     Expr.Var name -> do
+        assoc_t <- case  env !? name of
+                Just t -> pure t
+                Nothing -> throwError $ InferenceError $ "Type Environment does not contain a type for variable: " ++ name
+
         -- We throw everything through instantiate.
-        t <- instantiate $ env ! name
+        t <- instantiate assoc_t
         return (t, [])
 
     Expr.Lambda var_name _ expr -> do
