@@ -35,6 +35,7 @@ import Data.Functor (($>))
 -- import Debug.Trace qualified as Tr
 import Text.Parsec
 import Text.Parsec.String (Parser)
+import Report (Report(..))
 
 data TypeAnn = Int | Bool | Fn TypeAnn TypeAnn
   deriving (Show, Eq, Ord)
@@ -42,8 +43,23 @@ data TypeAnn = Int | Bool | Fn TypeAnn TypeAnn
 data Literal = LitInt Integer | LitBool Bool
   deriving (Show, Eq, Ord)
 
+instance Report Literal where
+  prettyPrint x =
+    case x of
+      LitInt i -> show i
+      LitBool i -> show i
+
+
 data Op = Add | Subtract | And | Or
   deriving (Show, Eq, Ord)
+
+instance Report Op where
+  prettyPrint op =
+    case op of
+      Add -> "+"
+      Subtract -> "*"
+      And -> "&&"
+      Or -> "||"
 
 data Expr
   = Var String
@@ -54,6 +70,17 @@ data Expr
   | BinOp Op Expr Expr
   | Let String Expr Expr
   deriving (Show, Eq, Ord)
+
+instance Report Expr where
+  prettyPrint expr =
+    case expr of
+      Var name -> name
+      Lambda var typ body -> "\\" ++ var ++ prettyPrint body
+      App f arg -> "( " ++ prettyPrint f ++ " ) (" ++ prettyPrint arg ++ ")"
+      If cond t f -> "if ( " ++ prettyPrint cond ++ ") then ( " ++ prettyPrint t ++ " ) else ( " ++ prettyPrint f ++ " )"
+      Lit l -> prettyPrint l
+      BinOp op l r -> "( " ++ prettyPrint l ++ ") " ++ prettyPrint op ++ " ( " ++ prettyPrint r ++ " )"
+      Let var assign body -> "let " ++ var ++ " = " ++ prettyPrint assign ++ " in " ++ prettyPrint body
 
 parse_all :: String -> Either ParseError Expr
 parse_all = parse parse_program ""
