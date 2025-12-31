@@ -1,9 +1,10 @@
+{- HLINT ignore "Use newtype instead of data" -} -- TODO (kc): Turning this off until we start implementing new Constraints
 module Type.Inference
   ( TypeEnv,
     Type (Int, Bool, Var, Arrow, Scheme),
     TypeError (..),
     Substitution (IdSub, Single, Composed),
-    Constraint,
+    Constraint (..),
     Infer,
     infer,
     instantiate,
@@ -18,7 +19,7 @@ where
 import Control.Monad (when)
 import Control.Monad.Except
 import Control.Monad.State
-import Data.Map (Map, (!), (!?))
+import Data.Map (Map, (!?))
 import Data.Map qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
@@ -53,9 +54,10 @@ data TypeError
   deriving (Show)
 
 {- Represents that two types should be equal -}
-type Constraint = (Type, Type)
+-- type Constraint = (Type, Type)
 
--- data Constraint = Eq (Type, Type) | TODO
+data Constraint = Equals (Type, Type)
+  deriving (Show, Eq)
 
 -- | A substitution.
 -- - We make this a Monoid to more easily handling [Substitution] -> Substituion through composing Substitutions
@@ -144,7 +146,7 @@ infer env = \case
     let fresh = Var name
     let t = Arrow t_e2 fresh
 
-    let constraints = cs_e1 ++ cs_e2 ++ [(t_e1, t)]
+    let constraints = cs_e1 ++ cs_e2 ++ [Equals (t_e1, t)]
 
     return (fresh, constraints)
   Expr.Lit x -> return $ case x of
@@ -192,7 +194,7 @@ infer env = \case
     let env' = Map.insert var_name assign_t_gen new_env
     -- generate type and constraints for body
     (body_t, body_cs) <- infer env' body
-    let constraints = body_cs ++ assign_cs ++ [(a, assign_t_gen)]
+    let constraints = body_cs ++ assign_cs ++ [Equals (a, assign_t_gen)]
 
     return (body_t, constraints)
   Expr.If cond tr fl -> do
@@ -200,13 +202,13 @@ infer env = \case
     (tr_t, tr_cs) <- infer env tr
     (fl_t, fl_cs) <- infer env fl
 
-    return (tr_t, cond_cs ++ tr_cs ++ fl_cs ++ [(Bool, cond_t), (tr_t, fl_t)])
+    return (tr_t, cond_cs ++ tr_cs ++ fl_cs ++ [Equals (Bool, cond_t), Equals (tr_t, fl_t)])
   Expr.BinOp op l r -> do
-    (l_t, l_cs) <- infer env l
-    (r_t, r_cs) <- infer env r
+    (l_t, _l_cs) <- infer env l
+    (r_t, _r_cs) <- infer env r
 
-    let int_cs = (Int, [(l_t, Int), (r_t, Int)])
-    let bool_cs = (Bool, [(l_t, Bool), (r_t, Bool)])
+    let int_cs = (Int, [Equals (l_t, Int), Equals (r_t, Int)])
+    let bool_cs = (Bool, [Equals (l_t, Bool), Equals (r_t, Bool)])
 
     return $ case op of
       Add -> int_cs
@@ -260,32 +262,35 @@ inferType expr =
  -      So to not make this suck we will want to use a union find algorithm here which will reduce the number of rewrites necessary
  -}
 
-(-->) :: Type -> Type -> (Type, Type) -> (Type, Type)
-(-->) t1 t2 (ta, tb) = (substitute ta, substitute tb)
+(-->) :: Type -> Type -> Constraint -> Constraint
+(-->) t1 t2 (Equals (ta, tb)) = Equals (substitute ta, substitute tb)
   where
     substitute typ
       | typ == t1 = t2
       | otherwise = case typ of
           Arrow a b -> Arrow (substitute a) (substitute b)
           _ -> typ
+(-->) _t1 _t2 _ = error "TODO: Only equality constraints are defined so far"
 
 (->>) :: Type -> Type -> [Constraint] -> [Constraint]
 (->>) t1 t2 = map (t1 --> t2)
 
 solve :: [Constraint] -> Unify Substitution
 solve [] = return IdSub
-solve ((t1, t2) : cs) =
-  if t1 == t2
-    then solve cs
-    else case (t1, t2) of
-      (Var _, t)
-        | t1 `notElem` freeVars t ->
-            solve (t1 ->> t2 $ cs) >>= \s -> return $ s <> Single (t1, t2)
-      (t, Var _)
-        | t2 `notElem` freeVars t ->
-            solve (t2 ->> t1 $ cs) >>= \s -> return $ s <> Single (t2, t1)
-      (Arrow t11 t12, Arrow t21 t22) -> solve $ cs ++ [(t11, t21), (t12, t22)]
-      _ -> throwError $ InferenceError $ "Could not unify " ++ show t1 ++ " and " ++ show t2
+solve (c: cs) =
+  case c of
+    Equals (t1, t2) -> if t1 == t2
+      then solve cs
+      else case (t1, t2) of
+        (Var _, t)
+          | t1 `notElem` freeVars t ->
+              solve (t1 ->> t2 $ cs) >>= \s -> return $ s <> Single (t1, t2)
+        (t, Var _)
+          | t2 `notElem` freeVars t ->
+              solve (t2 ->> t1 $ cs) >>= \s -> return $ s <> Single (t2, t1)
+        (Arrow t11 t12, Arrow t21 t22) -> solve $ cs ++ [Equals (t11, t21), Equals (t12, t22)]
+        _ -> throwError $ InferenceError $ "Could not unify " ++ show t1 ++ " and " ++ show t2
+    _ -> throwError $ InferenceError $ "TODO: Implement solver for non equality constraint " ++ show c
 
 -- TODO (kc): Need some unit tests
 getFreshVarMap :: Set Type -> Infer (Map Type Type)
