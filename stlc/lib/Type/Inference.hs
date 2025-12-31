@@ -44,7 +44,7 @@ instance Report Type where
       Bool -> "Bool"
       Var name -> name
       Arrow d r -> prettyPrint d ++ " -> " ++ prettyPrint r
-      Scheme vars t -> "forall " ++ show (Set.toList vars) ++ " . " ++ prettyPrint t
+      Scheme vars typ -> "forall " ++ show (Set.toList vars) ++ " . " ++ prettyPrint typ
 
 data TypeError
   = InferenceError String
