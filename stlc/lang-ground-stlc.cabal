@@ -121,7 +121,9 @@ test-suite lang-ground-stlc-test
     other-modules:  Utils,
                     TestSpec,
                     TestRunner,
-                    InferenceSpec
+                    InferenceSpec,
+                    ConstraintSolveSpec,
+                    ExpressionTypeTests
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:

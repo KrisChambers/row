@@ -1,0 +1,6 @@
+let pt_tuple = (0,0)
+let 2dpt = { x = 0, y = 0 }
+let 3dpt = { z = 0 | 2dpt }
+
+let extendTo3d p = { z = 0 | p }
+

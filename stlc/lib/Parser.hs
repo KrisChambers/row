@@ -3,7 +3,8 @@ module Parser
   ( -- Ast
     TypeAnn,
     Op (Add, And, Subtract, Or),
-    Expr (Lit, Var, Lambda, App, If, BinOp, Let),
+    Expr (Lit, Var, Lambda, App, If, BinOp, Let, Record),
+    RecordExpr (RecordCstr, RecordAccess, RecordExtension),
     Literal (LitInt, LitBool),
     Parser,
     -- Basic parsers
@@ -61,6 +62,16 @@ instance Report Op where
       And -> "&&"
       Or -> "||"
 
+data RecordExpr = RecordCstr [(String, Expr)] | RecordAccess Expr String | RecordExtension RecordExpr RecordExpr
+  deriving (Show, Eq, Ord)
+
+instance Report RecordExpr where
+  prettyPrint (RecordCstr ls) = "{" ++ labelLines ++ "\n\t}"
+            where
+                labelLines = foldl (\acc (l, assign) -> acc ++ "\n\t" ++ l ++ " = " ++ show assign) "" ls
+  prettyPrint (RecordAccess expr lbl) = prettyPrint expr ++ "." ++ lbl
+  prettyPrint (RecordExtension expr1 expr2) = "{" ++ prettyPrint expr1 ++  ", " ++ prettyPrint expr2 ++ "}"
+
 data Expr
   = Var String
   | Lambda String (Maybe TypeAnn) Expr
@@ -69,18 +80,21 @@ data Expr
   | Lit Literal
   | BinOp Op Expr Expr
   | Let String Expr Expr
+  | Record RecordExpr
   deriving (Show, Eq, Ord)
 
 instance Report Expr where
   prettyPrint expr =
     case expr of
       Var name -> name
-      Lambda var typ body -> "\\" ++ var ++ prettyPrint body
+      Lambda var _type body -> "\\" ++ var ++ prettyPrint body
       App f arg -> "( " ++ prettyPrint f ++ " ) (" ++ prettyPrint arg ++ ")"
       If cond t f -> "if ( " ++ prettyPrint cond ++ ") then ( " ++ prettyPrint t ++ " ) else ( " ++ prettyPrint f ++ " )"
       Lit l -> prettyPrint l
       BinOp op l r -> "( " ++ prettyPrint l ++ ") " ++ prettyPrint op ++ " ( " ++ prettyPrint r ++ " )"
       Let var assign body -> "let " ++ var ++ " = " ++ prettyPrint assign ++ " in " ++ prettyPrint body
+      Record rexpr -> prettyPrint rexpr
+
 
 parse_all :: String -> Either ParseError Expr
 parse_all = parse parse_program ""
