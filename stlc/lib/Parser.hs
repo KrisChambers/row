@@ -34,9 +34,10 @@ where
 import Control.Monad (void)
 import Data.Functor (($>))
 -- import Debug.Trace qualified as Tr
+
+import Report (Report (..))
 import Text.Parsec
 import Text.Parsec.String (Parser)
-import Report (Report(..))
 
 data TypeAnn = Int | Bool | Fn TypeAnn TypeAnn
   deriving (Show, Eq, Ord)
@@ -50,7 +51,6 @@ instance Report Literal where
       LitInt i -> show i
       LitBool i -> show i
 
-
 data Op = Add | Subtract | And | Or
   deriving (Show, Eq, Ord)
 
@@ -62,15 +62,15 @@ instance Report Op where
       And -> "&&"
       Or -> "||"
 
-data RecordExpr = RecordCstr [(String, Expr)] | RecordAccess Expr String | RecordExtension RecordExpr RecordExpr
+data RecordExpr = RecordCstr [(String, Expr)] | RecordAccess Expr String | RecordExtension Expr String Expr
   deriving (Show, Eq, Ord)
 
 instance Report RecordExpr where
   prettyPrint (RecordCstr ls) = "{" ++ labelLines ++ "\n\t}"
-            where
-                labelLines = foldl (\acc (l, assign) -> acc ++ "\n\t" ++ l ++ " = " ++ show assign) "" ls
+    where
+      labelLines = foldl (\acc (l, assign) -> acc ++ "\n\t" ++ l ++ " = " ++ show assign) "" ls
   prettyPrint (RecordAccess expr lbl) = prettyPrint expr ++ "." ++ lbl
-  prettyPrint (RecordExtension expr1 expr2) = "{" ++ prettyPrint expr1 ++  ", " ++ prettyPrint expr2 ++ "}"
+  prettyPrint (RecordExtension expr1 name expr2) = "{" ++ prettyPrint expr1 ++ " with " ++ name ++ " = " ++ prettyPrint expr2 ++ "}"
 
 data Expr
   = Var String
@@ -95,13 +95,12 @@ instance Report Expr where
       Let var assign body -> "let " ++ var ++ " = " ++ prettyPrint assign ++ " in " ++ prettyPrint body
       Record rexpr -> prettyPrint rexpr
 
-
 parse_all :: String -> Either ParseError Expr
 parse_all = parse parse_program ""
 
 parse_program :: Parser Expr
 parse_program = do
-  lets <- sepBy parse_top_level_let definition_delimiter
+  lets <- sepBy parse_top_level_let definition_delimiter <* (opt_space >> eof)
 
   let get_let_info expr = case expr of
         Let name value _ -> (name, value)
@@ -125,6 +124,15 @@ definition_delimiter = try newline_delimiter <|> semicolon
 
 semicolon :: Parser ()
 semicolon = void (char ';')
+
+start_rec :: Parser ()
+start_rec = void (char '{')
+
+end_rec :: Parser ()
+end_rec = void (char '}')
+
+access_rec :: Parser ()
+access_rec = void (char '.')
 
 newline_delimiter :: Parser ()
 newline_delimiter = newline >> opt_space >> newline >> return ()
@@ -166,10 +174,12 @@ variable = fmap Var identifier
 parse_expr :: Parser Expr
 parse_expr =
   try parse_let
+    <|> try parse_record_creation
     <|> try parse_if
     <|> try parse_lambda
     <|> try parse_binary_expr
     <|> try parse_application
+    <|> try parse_record_access
     <|> try literal
 
 parse_type :: Parser (Maybe TypeAnn)
@@ -237,17 +247,17 @@ parse_binary_op =
 
 parse_binary_expr :: Parser Expr
 parse_binary_expr = do
-    first <- opt_space >> parse_binary_arg
+  first <- opt_space >> parse_binary_arg
 
-    let next_arg = do
-            opt <- opt_space >> parse_binary_op
-            arg <- opt_space >> parse_binary_arg
-            return (opt, arg)
-    rest <- many1 (try next_arg)
+  let next_arg = do
+        opt <- opt_space >> parse_binary_op
+        arg <- opt_space >> parse_binary_arg
+        return (opt, arg)
+  rest <- many1 (try next_arg)
 
-    let build l (op, r) =  BinOp op l r
+  let build l (op, r) = BinOp op l r
 
-    return $ foldl build first rest
+  return $ foldl build first rest
 
 parse_if :: Parser Expr
 parse_if = do
@@ -267,3 +277,32 @@ parse_application = do
 
   return $ foldl App first rest
 
+parse_record_extension :: Parser Expr
+parse_record_extension = do
+  e1 <- opt_space >> parse_expr <* opt_space <* keyword "with"
+  l <- opt_space >> identifier <* opt_space <* char '='
+  e2 <- opt_space >> parse_expr
+
+  return $ Record $ RecordExtension e1 l e2
+
+parse_record_cstr :: Parser Expr
+parse_record_cstr = do
+  lbl <- opt_space >> identifier <* opt_space <* char '='
+  expr <- opt_space >> parse_expr
+
+  return $ Record $ RecordCstr [(lbl, expr)]
+
+-- TODO (kc): This needs to not use parse_expr without some tag before it.
+parse_record_access :: Parser Expr
+parse_record_access = do
+  expr <- opt_space >> variable <* char '.'
+  Record . RecordAccess expr <$> identifier
+
+parse_record_creation :: Parser Expr
+parse_record_creation =
+  start_rec
+    >> ( try parse_record_cstr
+           <|> try parse_record_extension
+       )
+      <* opt_space
+      <* end_rec

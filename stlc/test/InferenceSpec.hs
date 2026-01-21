@@ -358,14 +358,31 @@ recordTests =
                 _ -> assertFailure "Expected Row type with labels 'x' and 'y'"
               _ -> assertFailure ""
           Left err -> assertFailure $ show err,
-      testCase "Simple record select x from { x = 0, y = 0 } should give type Int" $ do
-        let expr = P.Record $ P.RecordAccess (P.Record (P.RecordCstr [("x", Lit (LitInt 10)), ("y", Lit (LitInt 0))])) "x"
+      testCase "Simple record extension { r with l = 5 } should give a type { l : Int | p }" $ do
+        let expr = P.Record $ P.RecordExtension (P.Record $ P.RecordCstr []) "l" (P.Lit $ LitInt 5)
         case doInfer emptyEnv expr of
           Right (t, c) -> do
             case t of
-              T.Record EmptyRow -> return ()
+              T.Record (Row l lt r) -> do
+                l @?= "l"
+                lt @?= T.Int
+                r @?= T.RowVar "r1"
               _ -> assertFailure $ "Expected an empty record but got: " ++ reportInferResult t c
+          Left err -> assertFailure $ show err,
+      testCase "Extend a non_empty record: { 2dOrigin with z = 0 }" $ do
+        let origin2d = T.Record (T.Row "x" T.Int (T.Row "y" T.Int EmptyRow))
+        let env = Map.insert "origin2d" origin2d emptyEnv
+        let expr = P.Record (P.RecordExtension (P.Var "origin2d") "z" (P.Lit $ LitInt 0))
+        case doInfer env expr of
           Left err -> assertFailure $ show err
+          Right (t, c) -> do
+            case t of
+              T.Record (Row l lt r) -> do
+                l @?= "z"
+                lt @?= T.Int
+                r @?= T.RowVar "r1"
+                c @?= [Equals (T.Record r, origin2d)]
+              _ -> assertFailure $ "Expected an empty record but got: " ++ reportInferResult t c
     ]
 
 reportInferResult :: Type -> [Constraint] -> String
@@ -466,7 +483,7 @@ rowEqualityTests =
       testCase "{ x : Int, y: Int} should not equal { x: v1 | r1 }" $ do
         let row1 = T.Record $ Row "y" T.Int (Row "x" T.Int EmptyRow)
         let row2 = T.Record $ Row "x" (T.Var "v1") (RowVar "r1")
-        assertBool "different types" ( row1 /= row2)
+        assertBool "different types" (row1 /= row2)
     ]
 
 -- ============================================================================

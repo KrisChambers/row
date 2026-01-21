@@ -302,9 +302,24 @@ infer env = \case
     let expected_t = Record $ Row label fresht freshRow
 
     return (fresht, c ++ [Equals (expected_t, expr_t)])
-  Expr.Record (RecordExpr.RecordExtension l r) -> do
-    -- TODO: What is the sequent rule again?
-    return (Record EmptyRow, [])
+  Expr.Record (RecordExpr.RecordExtension base name ext) -> do
+    --        A |- e1 : {p}     A |- e2 :: T
+    -- --------------------------------------------------
+    --      A |- { e1 with l = e2 } : { l :: T | p }
+    --
+    --  Input : e1, e2, l
+    --  Output : T, p
+
+    (base_t, cl) <- infer env base
+    freshRow <- nextFreshRow
+    (ext_t, cr) <- infer env ext
+
+    let result_t = Record (Row name ext_t freshRow)
+    let expected_t = Record freshRow
+
+    -- In more general systems this would generate a Lacks l p constraint
+    -- With microsofts proposal we have a simplified inference since we allow "scoped" labels
+    return (result_t, cl ++ cr ++ [Equals (expected_t, base_t)])
 
 generalize :: Type -> Type
 generalize t = case t of
@@ -401,9 +416,6 @@ solve (c : cs) =
               _ -> throwError $ InferenceError $ "Could not unify rows: " ++ show t1 ++ " and " ++ show t2
           _ -> throwError $ InferenceError $ "Could not unify " ++ show t1 ++ " and " ++ show t2
 
-
-
--- _ -> throwError $ InferenceError $ "TODO: Implement solver for non equality constraint " ++ show c
 
 -- TODO (kc): Need some unit tests
 getFreshVarMap :: Set Type -> Infer (Map Type Type)

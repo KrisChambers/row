@@ -1,5 +1,7 @@
 module ExpressionTypeTests (expressionTypeTests) where
 
+import Control.Monad.Except
+import Control.Monad.State
 import Data.List (isInfixOf)
 import Data.Map qualified as Map
 import Data.Set qualified as Set
@@ -10,8 +12,6 @@ import Test.Tasty.HUnit
 import Test.Tasty.QuickCheck
 import Type.Inference
 import Type.Inference qualified as T
-import Control.Monad.Except
-import Control.Monad.State
 
 expressionTypeTests :: TestTree
 expressionTypeTests =
@@ -29,27 +29,36 @@ recordTests =
         case inferType expr of
           Left err -> assertFailure $ show err
           Right t -> do
-            t @?= T.Record EmptyRow
-    , testCase "Infers { x = 0, y = 0 } :: (| x : Int, y: Int |)" $ do
-      let expr = P.Record (RecordCstr [("x", P.Lit (LitInt 0)), ("y", P.Lit (LitInt 0) )])
-      case inferType expr of
-        Left err -> assertFailure $ show err
-        Right t -> do
-          t @?= T.Record (Row "y" T.Int (Row "x" T.Int EmptyRow))
-    , testCase "Infers { x = 0 }.x as Int" $ do
-      let r = P.Record (RecordCstr [("x", P.Lit (LitInt 0)), ("y", P.Lit (LitInt 0) )])
-      let expr = P.Record (RecordAccess r "x")
+            t @?= T.Record EmptyRow,
+      testCase "Infers { x = 0, y = 0 } :: (| x : Int, y: Int |)" $ do
+        let expr = P.Record (RecordCstr [("x", P.Lit (LitInt 0)), ("y", P.Lit (LitInt 0))])
+        case inferType expr of
+          Left err -> assertFailure $ show err
+          Right t -> do
+            t @?= T.Record (Row "y" T.Int (Row "x" T.Int EmptyRow)),
+      testCase "Infers { x = 0 }.x as Int" $ do
+        let r = P.Record (RecordCstr [("x", P.Lit (LitInt 0)), ("y", P.Lit (LitInt 0))])
+        let expr = P.Record (RecordAccess r "x")
 
-      case inferType expr of
-        Left err -> assertFailure $ show err
-        Right t -> do
-          t @?= T.Int
+        case inferType expr of
+          Left err -> assertFailure $ show err
+          Right t -> do
+            t @?= T.Int,
+      testCase "Infers proper arrow type for \\r -> r.name" $ do
+        let expr = P.Lambda "r" Nothing (P.Record (RecordAccess (P.Var "r") "name"))
 
-    , testCase "Infers row type in \r -> r.name" $ do
-      let expr = P.Lambda "r" Nothing (P.Record (RecordAccess (P.Var "r") "name" ))
+        case inferType expr of
+          Left err -> assertFailure $ show err
+          Right t -> do
+            -- expr : { name : a | r } -> a
+            t @?= T.Arrow (T.Record (T.Row "name" (T.Var "v2") (T.RowVar "r1"))) (T.Var "v2"),
+      testCase "Infers correct type of extension { orgin2d with z = 0 } where origin2d = { x = 0, y = 0}" $ do
+        let expr = P.Let "origin2d" (P.Record (P.RecordCstr [("x", P.Lit $ LitInt 0), ("y", P.Lit $ LitInt 0)])) (P.Record (P.RecordExtension (P.Var "origin2d") "z" (P.Lit (LitInt 0))))
+        let expected_t = T.Record (Row "z" T.Int (T.Row "y" T.Int (T.Row "x" T.Int EmptyRow)))
 
-      case inferType expr of
-        Left err -> assertFailure $ show err
-        Right t -> do
-          t @?= T.Int
+        case inferType expr of
+          Left err -> assertFailure $ show err
+          Right t -> do
+            t @?= expected_t
+
     ]

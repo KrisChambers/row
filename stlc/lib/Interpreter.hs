@@ -33,6 +33,7 @@ data Value =
     RInt Integer
     | RBool Bool
     | RFunc String Expr
+    | RRecord [(String, Value)]
     deriving (Show, Eq)
 
 --- Mapping of variables to runtime values
@@ -245,4 +246,27 @@ eval (App f arg) = do
     traceM $ "RESULT := " ++  show result
 
     return result
+
+eval (Record (RecordCstr ls)) = do
+    let eval_map (l, e) = do
+          expr <- eval e
+          return (l, expr)
+
+    rows <- mapM eval_map ls
+    return $ Record $ RecordCstr rows
+
+eval (Record r) = return $ Lit $ LitInt 0
+
+
+
+-- eval (Record (RecordAccess e l)) = do
+--   r <- eval e
+--
+--   return r
+
+
+
+
+
+
 

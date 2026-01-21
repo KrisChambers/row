@@ -1,0 +1,5 @@
+name = "Simple Function to create a simple record"
+phase = "eval"
+expect = "success"
+expected_type = "Int"
+expected_value = "Lit (LitInt 0)"
