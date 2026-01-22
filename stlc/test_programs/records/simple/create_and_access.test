@@ -1,4 +1,4 @@
-name = "Simple Function to create a simple record"
+name = "Simple Function to create a simple record and access a label"
 phase = "eval"
 expect = "success"
 expected_type = "Int"

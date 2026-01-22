@@ -108,6 +108,24 @@ substitute (Let name assign body) = do
 
     return $ Let name assign_s body_s
 
+substitute (Record (RecordCstr lbls)) = do
+    let sub_labels (l, e) = (l,) <$> substitute e
+
+    new_lbls <- mapM sub_labels lbls
+
+    return $ Record $ RecordCstr new_lbls
+
+substitute (Record (RecordExtension base l e)) = do
+    base' <- substitute base
+    e' <- substitute e
+
+    return $ Record $ RecordExtension  base' l e'
+
+substitute (Record (RecordAccess e l)) = do
+    e' <- substitute e
+
+    return $ Record $ RecordAccess e' l
+
 --- >>> evalWithEnv (Map.fromList [("a", RInt 1)]) (Var "a")
 -- Couldn't match expected type `Expr' with actual type `Value'
 -- In the expression: RInt 1
@@ -255,18 +273,22 @@ eval (Record (RecordCstr ls)) = do
     rows <- mapM eval_map ls
     return $ Record $ RecordCstr rows
 
-eval (Record r) = return $ Lit $ LitInt 0
+eval (Record (RecordExtension e1 l e2)) = do
+  v1 <- eval e1
+  v2 <- eval e2
 
+  case v1 of
+        Record (RecordCstr lbls) -> do
+            return $ Record (RecordCstr $ (l, v2):lbls)
+        _ -> throwError $ Error "Extending records"
 
+eval (Record (RecordAccess e b))= do
+  r <- eval e
 
--- eval (Record (RecordAccess e l)) = do
---   r <- eval e
---
---   return r
-
-
-
-
-
-
+  case r of
+    Record (RecordCstr lbls) -> do
+      case Map.lookup b (Map.fromList lbls) of
+            Nothing -> throwError (Error $ "Could not find a value for " ++ show b)
+            Just v -> return v
+    _ -> throwError $ Error "Accessing Records"
 

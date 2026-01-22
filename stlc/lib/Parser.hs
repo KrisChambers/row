@@ -33,7 +33,6 @@ where
 
 import Control.Monad (void)
 import Data.Functor (($>))
--- import Debug.Trace qualified as Tr
 
 import Report (Report (..))
 import Text.Parsec
@@ -279,18 +278,27 @@ parse_application = do
 
 parse_record_extension :: Parser Expr
 parse_record_extension = do
-  e1 <- opt_space >> parse_expr <* opt_space <* keyword "with"
+  e1 <- opt_space >> variable <* opt_space <* keyword "with"
   l <- opt_space >> identifier <* opt_space <* char '='
   e2 <- opt_space >> parse_expr
 
   return $ Record $ RecordExtension e1 l e2
 
-parse_record_cstr :: Parser Expr
-parse_record_cstr = do
-  lbl <- opt_space >> identifier <* opt_space <* char '='
-  expr <- opt_space >> parse_expr
+parse_record_label_definition :: Parser (String, Expr)
+parse_record_label_definition =
+  (,)
+    <$> (identifier <* opt_space <* char '=')
+    <*> (opt_space >> parse_expr)
 
-  return $ Record $ RecordCstr [(lbl, expr)]
+parse_record_cstr_body :: Parser [(String, Expr)]
+parse_record_cstr_body = do
+  first <- opt_space >> parse_record_label_definition
+  rest <- many $ try $ opt_space >> char ',' >> opt_space >> parse_record_label_definition
+
+  return $ first : rest
+
+parse_record_cstr :: Parser Expr
+parse_record_cstr = do Record . RecordCstr <$> parse_record_cstr_body
 
 -- TODO (kc): This needs to not use parse_expr without some tag before it.
 parse_record_access :: Parser Expr

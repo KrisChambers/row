@@ -1,0 +1,5 @@
+let main =
+  let
+    pt = { x = 0, y = 0 }
+  in
+    { pt with z = 0 }
