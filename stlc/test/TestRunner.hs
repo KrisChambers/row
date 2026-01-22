@@ -81,7 +81,7 @@ checkEval spec source = case P.parse_all source of
     Left err -> assertFailure $ "Parse failed: " ++ show err
     Right expr -> case TI.inferType expr of
         Left err -> assertFailure $ "Type error: " ++ show err
-        Right typ -> case I.eval_expr expr of
+        Right typ -> case I.evalExpr expr of
             Left err ->
                 if tsExpect spec == Failure
                     then checkErrorContains (tsErrorContains spec) (show err)

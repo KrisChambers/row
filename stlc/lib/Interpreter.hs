@@ -1,4 +1,4 @@
-module Interpreter (eval, eval_expr, Env, EvaluationError, Value(RInt, RBool, RFunc)) where
+module Interpreter (eval, evalExpr, Env, EvaluationError, Value(RInt, RBool, RFunc)) where
 
 import Parser
 import Data.Map qualified as Map
@@ -68,8 +68,8 @@ liftMaybe :: MonadError e m => e -> Maybe a -> m a
 liftMaybe err = maybe (throwError err) return
 
 
-eval_expr :: Expr -> Either EvaluationError Expr
-eval_expr expr = evalState s Map.empty
+evalExpr :: Expr -> Either EvaluationError Expr
+evalExpr expr = evalState s Map.empty
     where
         s = runExceptT $ eval expr
 
