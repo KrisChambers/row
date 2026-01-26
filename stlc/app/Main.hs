@@ -2,7 +2,7 @@ module Main where
 
 import Parser (parse_all)
 import Type.Inference (inferType)
-import Interpreter (eval_expr)
+import Interpreter (evalExpr)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
 

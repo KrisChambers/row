@@ -73,9 +73,9 @@ evalExpr expr = evalState s Map.empty
     where
         s = runExceptT $ eval expr
 
--- evalWithEnv :: Env -> Expr -> Either EvaluationError Expr
--- evalWithEnv env expr = evalState (runExceptT $ eval expr) env
 
+--- Handles substitutions of a variable with it's associated values in the environment
+--- This seems like it might be a little redundant with eval
 substitute :: Expr -> Eval Expr
 substitute (Var a) = do
     a_value <- valueOf a
@@ -126,36 +126,12 @@ substitute (Record (RecordAccess e l)) = do
 
     return $ Record $ RecordAccess e' l
 
---- >>> evalWithEnv (Map.fromList [("a", RInt 1)]) (Var "a")
--- Couldn't match expected type `Expr' with actual type `Value'
--- In the expression: RInt 1
--- In the expression: ("a", RInt 1)
--- In the first argument of `fromList', namely `[("a", RInt 1)]'
+--- Evaluates an expression through term substitutions
 eval :: Expr -> Eval Expr
 eval (Var a) = valueOf a >>= liftMaybe (Error $ "Missing value: " ++ show a)
 
---- >>> evalWithEnv (Map.fromList []) (Lambda "x" Nothing (Lit $ LitInt 1))
--- *** Exception: /home/kris/personal/lang-ground/stlc/lib/Interpreter.hs:79:12: error: [GHC-83865]
---     • Couldn't match expected type ‘Expr’ with actual type ‘Value’
---     • In the first argument of ‘return’, namely ‘value’
---       In a stmt of a 'do' block: return value
---       In the expression:
---         do body_value <- eval body
---            let value = RFunc name body_value
---            return value
--- (deferred type error)
 eval (Lambda name _ body) = return $ Lambda name Nothing body
 
---- >>> evalWithEnv (Map.fromList []) (BinOp Add (Lit $ LitInt 1) (Lit $ LitInt 1))
--- *** Exception: /home/kris/personal/lang-ground/stlc/lib/Interpreter.hs:79:12: error: [GHC-83865]
---     • Couldn't match expected type ‘Expr’ with actual type ‘Value’
---     • In the first argument of ‘return’, namely ‘value’
---       In a stmt of a 'do' block: return value
---       In the expression:
---         do body_value <- eval body
---            let value = RFunc name body_value
---            return value
--- (deferred type error)
 eval (BinOp op left right) = do
     lvalue <- eval left
     rvalue <- eval right
@@ -171,40 +147,10 @@ eval (BinOp op left right) = do
                     _ -> Nothing
         _ -> Nothing
 
---- >>> evalWithEnv (Map.fromList []) (Lit $ LitBool True)
--- *** Exception: /home/kris/personal/lang-ground/stlc/lib/Interpreter.hs:79:12: error: [GHC-83865]
---     • Couldn't match expected type ‘Expr’ with actual type ‘Value’
---     • In the first argument of ‘return’, namely ‘value’
---       In a stmt of a 'do' block: return value
---       In the expression:
---         do body_value <- eval body
---            let value = RFunc name body_value
---            return value
--- (deferred type error)
 eval (Lit (LitBool b)) = return $ Lit $ LitBool b
 
---- >>> evalWithEnv (Map.fromList []) (Lit $ LitInt 1)
--- *** Exception: /home/kris/personal/lang-ground/stlc/lib/Interpreter.hs:79:12: error: [GHC-83865]
---     • Couldn't match expected type ‘Expr’ with actual type ‘Value’
---     • In the first argument of ‘return’, namely ‘value’
---       In a stmt of a 'do' block: return value
---       In the expression:
---         do body_value <- eval body
---            let value = RFunc name body_value
---            return value
--- (deferred type error)
 eval (Lit (LitInt i)) = return $ Lit $ LitInt i
 
---- >>> evalWithEnv (Map.fromList []) (Let "foo" (Lit $ LitInt 1) (BinOp Add (Var "foo") (Lit $ LitInt 1)))
--- *** Exception: /home/kris/personal/lang-ground/stlc/lib/Interpreter.hs:79:12: error: [GHC-83865]
---     • Couldn't match expected type ‘Expr’ with actual type ‘Value’
---     • In the first argument of ‘return’, namely ‘value’
---       In a stmt of a 'do' block: return value
---       In the expression:
---         do body_value <- eval body
---            let value = RFunc name body_value
---            return value
--- (deferred type error)
 eval (Let name assign body) = do
     traceM $ "\n" ++ name ++ " = " ++ show assign  ++ " in " ++ show body
     env <- get
@@ -213,32 +159,12 @@ eval (Let name assign body) = do
 
     eval body
 
---- >>> evalWithEnv (Map.fromList []) (If (Lit $ LitBool True) (Lit $ LitInt 1) (Lit $ LitInt 2))
--- *** Exception: /home/kris/personal/lang-ground/stlc/lib/Interpreter.hs:79:12: error: [GHC-83865]
---     • Couldn't match expected type ‘Expr’ with actual type ‘Value’
---     • In the first argument of ‘return’, namely ‘value’
---       In a stmt of a 'do' block: return value
---       In the expression:
---         do body_value <- eval body
---            let value = RFunc name body_value
---            return value
--- (deferred type error)
 eval (If cond l_expr r_expr) = eval cond >>= \case
         Lit ( LitBool True) -> eval l_expr
         Lit ( LitBool False) -> eval r_expr
 
         _ -> throwError (Error "Oops")
 
---- >>> evalWithEnv (Map.fromList [("add", (RFunc "x" (Lambda "y" Nothing (BinOp Add (Var "x") (Var "y") ))))]) (App (Var "add") (Lit $ LitInt 3))
--- Couldn't match expected type `Expr' with actual type `Value'
--- In the expression:
---   RFunc "x" (Lambda "y" Nothing (BinOp Add (Var "x") (Var "y")))
--- In the expression:
---   ("add",
---    (RFunc "x" (Lambda "y" Nothing (BinOp Add (Var "x") (Var "y")))))
--- In the first argument of `fromList', namely
---   `[("add",
---      (RFunc "x" (Lambda "y" Nothing (BinOp Add (Var "x") (Var "y")))))]'
 eval (App f arg) = do
     -- We need to handle the App rule of evaluation properly
     -- (\x.e1) e2 |- e1[x->e2]
