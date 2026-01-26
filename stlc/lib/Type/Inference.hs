@@ -2,9 +2,8 @@
 -- TODO (kc): Turning this off until we start implementing new Constraints
 module Type.Inference
   ( TypeEnv,
-    Type (Int, Bool, Var, Arrow, Record),
+    Type (Int, Bool, Var, Arrow, Record, EmptyRow, Row),
     Scheme (Forall),
-    Row (EmptyRow, RowVar, Row),
     TypeError (..),
     Substitution (IdSub, Single, Composed),
     Constraint (..),
@@ -47,52 +46,38 @@ import Data.Bifunctor (bimap)
 --    | Bool
 --    | a
 --    | t -> t ! e
---    | forall a,.. . t
 --    | { l1 : t, ... ln: tn }
-data Type = Int | Bool | Var String | Arrow Type Type | Record Row
-  deriving (Show, Ord, Eq)
-
-data Row = EmptyRow | RowVar String | Row String Type Row
+data Type = Int | Bool | Var String | Arrow Type Type | Record Type | EmptyRow | Row (String, Type) Type
   deriving (Show, Ord)
-
-data Effect = EmptyEffect | EffectVar String | EffectRow Type Effect
 
 data Scheme = Forall (Set String) Type
 
-toHead :: Row -> String -> Row
+toHead :: Type -> String -> Type
 toHead r l = case r of
-  EmptyRow -> r
-  RowVar _ -> r
-  Row _ _ EmptyRow -> r
-  Row _ _ (RowVar _) -> r
-  Row label t (Row nextLabel nextType rowTail) ->
+  Row _ (Var _) -> r
+  Row (label, t) (Row (nextLabel, nextType) rowTail) ->
     if label == l
       then r
       else
         if nextLabel == l
-          then Row nextLabel nextType (Row label t rowTail)
-          else Row nextLabel nextType newTail
+          then Row (nextLabel, nextType) (Row (label, t) rowTail)
+          else Row (nextLabel, nextType) newTail
     where
-      newTail = toHead (Row label t rowTail) l
+      newTail = toHead (Row (label, t) rowTail) l
+  _ -> r
 
-instance Eq Row where
+instance Eq Type where
+  (==) Int Int = True
+  (==) Bool Bool = True
+  (==) (Var a) (Var b) = a == b
+  (==) (Arrow a1 r1) (Arrow a2 r2) = a1 == a2 && r1 == r2
+  (==) (Record r1) (Record r2) = r1 == r2
   (==) EmptyRow EmptyRow = True
-  (==) (RowVar a) (RowVar b) = a == b
-  (==) (Row a t r) r' =
+  (==) (Row (a, t) r) r' =
     case toHead r' a of
-      Row b u s -> b == a && t == u && r == s
+      Row (b, u) s -> b == a && t == u && r == s
       _ -> False
   (==) _ _ = False
-
-instance Report Row where
-  prettyPrint EmptyRow = "EMPTY"
-  prettyPrint (RowVar v) = v
-  prettyPrint (Row label t rTail) = label ++ " : " ++ prettyPrint t ++ " " ++ rowTail
-    where
-      rowTail = case rTail of
-        EmptyRow -> ""
-        RowVar v -> v
-        Row {} -> ", " ++ prettyPrint rTail
 
 instance Report Type where
   prettyPrint t =
@@ -102,21 +87,18 @@ instance Report Type where
       Var name -> name
       Arrow d r -> prettyPrint d ++ " -> " ++ prettyPrint r
       Record row -> "{" ++ prettyPrint row ++ "}"
+      EmptyRow -> ""
+      Row (l, lt) rtail -> l ++ " : " ++ prettyPrint lt ++ separator ++ " " ++ prettyPrint rtail
+         where
+          separator = case rtail of
+            EmptyRow -> ""
+            Var v -> v
+            Row {} -> ","
+            _ -> "ERROR"
+
 
 instance Report Scheme where
   prettyPrint (Forall vars t) = "forall " ++ show vars ++ " . " ++ prettyPrint t
-
-instance Report Effect where
-  prettyPrint e =
-    case e of
-      EmptyEffect -> "{}"
-      EffectVar v -> "{" ++ v ++ "}"
-      EffectRow t r -> "{" ++ prettyPrint t ++ separator ++ prettyPrint r ++ "}"
-        where
-          separator = case r of
-            EmptyEffect -> ""
-            EffectVar _ -> "| "
-            EffectRow _ _ -> ","
 
 data TypeError
   = InferenceError String
@@ -194,7 +176,7 @@ nextFreshVar = do
   _ <- puts setVar a
   return $ "v" ++ show a
 
-nextFreshRow :: Infer Row
+nextFreshRow :: Infer Type
 nextFreshRow = do
   let setRow s v = s {row = v}
 
@@ -202,11 +184,7 @@ nextFreshRow = do
   let a = n + 1
   _ <- puts setRow a
 
-  return $ RowVar ("r" ++ show a)
-
--- extend :: name -> Type -> Infer(TypeEnv, Type) : This need to store a (Forall [] t)
--- instantiate :: Scheme -> Type (This needs to generate new stuff
-
+  return $ Var ("r" ++ show a)
 
 -- The type of some binary function
 binaryType :: Scheme
@@ -220,9 +198,10 @@ freeVars t = case t of
   Arrow t1 t2 -> Set.union (freeVars t1) (freeVars t2)
   Int -> Set.empty
   Bool -> Set.empty
-  Record EmptyRow -> Set.empty
-  Record (RowVar n) -> Set.fromList [n]
-  Record (Row _ lt row) -> Set.union (freeVars lt) (freeVars (Record row))
+  Record row -> freeVars row
+  Row (_, lt) rtail -> Set.union (freeVars lt) (freeVars rtail)
+  EmptyRow -> Set.empty
+  -- Record (Row (_, lt) row) -> Set.union (freeVars lt) (freeVars (Record row))
 
 infer :: TypeEnv -> Expr -> Infer (Type, [Constraint])
 infer env = \case
@@ -322,7 +301,7 @@ infer env = \case
           return (l, result)
 
     c <- mapM do_infer assignments
-    let row = foldl (\acc (l, (t, _)) -> Row l t acc) EmptyRow c
+    let row = foldl (\acc (l, (t, _)) -> Row (l, t) acc) EmptyRow c
     let constraints = foldl (\acc (_, (_, cst)) -> acc ++ cst) [] c
     return (Record row, constraints)
   Expr.Record (RecordExpr.RecordAccess expr label) -> do
@@ -334,7 +313,7 @@ infer env = \case
     (expr_t, c) <- infer env expr
     freshRow <- nextFreshRow
 
-    let expected_t = Record $ Row label fresht freshRow
+    let expected_t = Record $ Row (label, fresht) freshRow
 
     return (fresht, c ++ [Equals (expected_t, expr_t)])
   Expr.Record (RecordExpr.RecordExtension base name ext) -> do
@@ -349,7 +328,7 @@ infer env = \case
     freshRow <- nextFreshRow
     (ext_t, cr) <- infer env ext
 
-    let result_t = Record (Row name ext_t freshRow)
+    let result_t = Record (Row (name, ext_t) freshRow)
     let expected_t = Record freshRow
 
     -- In more general systems this would generate a Lacks l p constraint
@@ -378,23 +357,9 @@ apply sub t = case sub of
       | typ == a = b
       | otherwise = case typ of
           Arrow t1 t2 -> Arrow (applyToType (a, b) t1) (applyToType (a, b) t2)
-          Record r -> Record (applyToRow (a, b) r)
+          Record r -> Record (applyToType (a, b) r)
+          Row (l, lt) r' -> Row (l, applyToType (a, b) lt) (applyToType (a,b) r')
           _ -> typ
-
-    applyToRow (a, b) = \case
-      EmptyRow -> EmptyRow
-      RowVar v -> case (a, b) of
-        (Var n, Record r') | v == n -> r'
-        _ -> RowVar v
-      Row l lt r' -> Row l (applyToType (a, b) lt) (applyToRow (a, b) r')
-
--- t1 -> t2 {} , s1 -> s2 {e} -->
--- applyToEffect (a, b) = \case
---   EmptyEffect -> EmptyEffect
---   EffectVar v -> case (a,b) of
---     (Var n, Arrow _ _ e') |  n == v -> e'
---     _ -> EffectVar v
---   EffectRow t e -> EffectRow (applyToType (a,b) t) (applyToEffect (a,b) e)
 
 -- TODO (kc): We need to be able to pull out the top level lets here. This will help with some testing
 inferType :: Expr -> Either TypeError Type
@@ -450,10 +415,10 @@ solve (c : cs) =
             | n `notElem` freeVars t ->
                 solve (t2 ->> t1 $ cs) >>= \s -> return $ s <> Single (t2, t1)
           (Arrow t11 t12, Arrow t21 t22) -> solve $ cs ++ [Equals (t11, t21), Equals (t12, t22)]
-          (Record (RowVar p), Record r) -> solve (Equals (Var p, Record r) : cs)
-          (Record r, Record (RowVar p)) -> solve (Equals (Var p, Record r) : cs)
-          (Record (Row l t r), Record row) -> case toHead row l of
-            Row _ t' r' -> solve $ cs ++ [Equals (t, t'), Equals (Record r, Record r')]
+          (Record (Var p), Record r) -> solve (Equals (Var p, r) : cs)
+          (Record r, Record (Var p)) -> solve (Equals (Var p, r) : cs)
+          (Record (Row (l, t) r), Record row) -> case toHead row l of
+            Row (_, t') r' -> solve $ cs ++ [Equals (t, t'), Equals (Record r, Record r')]
             _ -> throwError $ InferenceError $ "Could not unify rows: " ++ show t1 ++ " and " ++ show t2
           _ -> throwError $ InferenceError $ "Could not unify " ++ show t1 ++ " and " ++ show t2
 

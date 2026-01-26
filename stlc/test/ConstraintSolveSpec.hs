@@ -1,13 +1,7 @@
 module ConstraintSolveSpec (constraintSolveTests) where
 
-import Data.List (isInfixOf)
-import Data.Map qualified as Map
-import Data.Set qualified as Set
-import Parser (Expr (..), Literal (..), Op (..))
-import Parser qualified as P
 import Test.Tasty
 import Test.Tasty.HUnit
-import Test.Tasty.QuickCheck
 import Type.Inference
 import Type.Inference qualified as T
 import Control.Monad.Except
@@ -21,13 +15,11 @@ constraintSolveTests =
     , recordTests
     ]
 
--- doInfer :: TypeEnv -> Expr -> Either TypeError (Type, [Constraint])
--- doInfer env expr = runInfer (infer env expr) 0 0
-
 doSolve :: [Constraint] -> Either TypeError Substitution
 doSolve cs = evalState unifyState IdSub
   where
     unifyState = runExceptT (solve cs)
+
 -- ============================================================================
 -- HUnit Tests
 -- ============================================================================
@@ -49,14 +41,14 @@ recordTests =
   testGroup
     "Solving Row constraints for Records"
     [ testCase "{ x: Int, y: Bool } == { y: Bool, x: Int} should give ID" $ do
-        let r1 = T.Record (Row "x" T.Int ( Row "y" T.Bool EmptyRow))
-        let r2 = T.Record (Row "y" T.Bool ( Row "x" T.Int EmptyRow))
+        let r1 = T.Record (Row ("x", T.Int) (Row ("y", T.Bool) EmptyRow))
+        let r2 = T.Record (Row ("y", T.Bool) (Row ("x", T.Int) EmptyRow))
         case doSolve [Equals (r1, r2)] of
           Left err -> assertFailure $ show err
           Right sub -> do
             sub @?= IdSub,
       testCase "Equal Records constrain matching label types" $ do
-        let r n = T.Record (Row "x" (T.Var n) EmptyRow)
+        let r n = T.Record (Row ("x", T.Var n) EmptyRow)
 
         case doSolve [Equals (r "v1", r "v2")] of
           Left err -> assertFailure $ show err
@@ -64,14 +56,14 @@ recordTests =
             sub @?= Single (T.Var "v1", T.Var "v2"),
 
       testCase "Equal Records constrain types of matching labels" $ do
-        let r n = T.Record (Row "x" T.Int (RowVar n))
+        let r n = T.Record (Row ("x", T.Int) (T.Var n))
 
         case doSolve [Equals (r "a", r "b")] of
           Left err -> assertFailure $ show err
           Right sub -> do
-            sub @?= Single (T.Var "a", T.Record (T.RowVar "b"))
+            sub @?= Single (T.Var "a", T.Var "b")
 
-            -- [(RowVar "a", RowVar "b")] . (| thing :: a |) -> (| thing :: b |)
+            -- [(Var "a", Var "b")] . (| thing :: a |) -> (| thing :: b |)
     ]
 
 -- ============================================================================

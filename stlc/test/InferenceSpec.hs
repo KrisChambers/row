@@ -168,7 +168,7 @@ applicationTests =
             assertBool "Should have at least one constraint" (not (null cs))
           Left err -> assertFailure $ show err,
       testCase "f x where f:Int->Bool, x:Int: constraint links f to arg->result" $ do
-        let env = Map.fromList [("f", Forall Set.empty $ Arrow T.Int T.Bool), ("x", Forall Set.empty $ T.Int)]
+        let env = Map.fromList [("f", Forall Set.empty $ Arrow T.Int T.Bool), ("x", Forall Set.empty T.Int)]
         let expr = App (P.Var "f") (P.Var "x")
         case doInfer env expr of
           Right (t, cs) -> do
@@ -350,7 +350,7 @@ recordTests =
           Right (t, _) -> do
             case t of
               T.Record row -> case row of
-                Row l1 t1 (Row l2 t2 EmptyRow) -> do
+                Row (l1, t1) (Row (l2, t2) EmptyRow) -> do
                   l1 @?= "y"
                   l2 @?= "x"
                   t1 @?= T.Int
@@ -363,24 +363,24 @@ recordTests =
         case doInfer emptyEnv expr of
           Right (t, c) -> do
             case t of
-              T.Record (Row l lt r) -> do
+              T.Record (Row (l, lt) r) -> do
                 l @?= "l"
                 lt @?= T.Int
-                r @?= T.RowVar "r1"
+                r @?= T.Var "r1"
               _ -> assertFailure $ "Expected an empty record but got: " ++ reportInferResult t c
           Left err -> assertFailure $ show err,
       testCase "Extend a non_empty record: { 2dOrigin with z = 0 }" $ do
-        let origin2d = T.Record (T.Row "x" T.Int (T.Row "y" T.Int EmptyRow))
+        let origin2d = T.Record (T.Row ("x", T.Int) (T.Row ("y", T.Int) EmptyRow))
         let env = Map.insert "origin2d" (Forall Set.empty origin2d) emptyEnv
         let expr = P.Record (P.RecordExtension (P.Var "origin2d") "z" (P.Lit $ LitInt 0))
         case doInfer env expr of
           Left err -> assertFailure $ show err
           Right (t, c) -> do
             case t of
-              T.Record (Row l lt r) -> do
+              T.Record (Row (l, lt) r) -> do
                 l @?= "z"
                 lt @?= T.Int
-                r @?= T.RowVar "r1"
+                r @?= T.Var "r1"
                 c @?= [Equals (T.Record r, origin2d)]
               _ -> assertFailure $ "Expected an empty record but got: " ++ reportInferResult t c
     ]
@@ -396,29 +396,29 @@ toHeadTests =
     "toHead row reordering"
     [ testCase "Empty row returns empty row" $ do
         toHead EmptyRow "x" @?= EmptyRow,
-      testCase "RowVar returns unchanged" $ do
-        toHead (RowVar "r") "x" @?= RowVar "r",
+      testCase "Var returns unchanged" $ do
+        toHead (T.Var "r") "x" @?= T.Var "r",
       testCase "Label already at head returns unchanged" $ do
-        let row = Row "x" T.Int (Row "y" T.Bool EmptyRow)
+        let row = Row ("x", T.Int) (Row ("y", T.Bool) EmptyRow)
         toHead row "x" @?= row,
       testCase "Swaps adjacent element to head" $ do
-        let row = Row "a" T.Int (Row "x" T.Bool EmptyRow)
-        toHead row "x" @?= Row "x" T.Bool (Row "a" T.Int EmptyRow),
+        let row = Row ("a", T.Int) (Row ("x", T.Bool) EmptyRow)
+        toHead row "x" @?= Row ("x", T.Bool) (Row ("a", T.Int) EmptyRow),
       testCase "Duplicate labels: finds first occurrence (x::Int before x::Bool)" $ do
-        let row = Row "a" T.Int (Row "x" T.Int (Row "x" T.Bool EmptyRow))
-        let expected = Row "x" T.Int (Row "a" T.Int (Row "x" T.Bool EmptyRow))
+        let row = Row ("a", T.Int) (Row ("x", T.Int) (Row ("x", T.Bool) EmptyRow))
+        let expected = Row ("x", T.Int) (Row ("a", T.Int) (Row ("x", T.Bool) EmptyRow))
         toHead row "x" @?= expected,
       testCase "Label deeper in row is brought forward" $ do
-        let row = Row "a" T.Int (Row "b" T.Bool (Row "x" T.Int EmptyRow))
+        let row = Row ("a", T.Int) (Row ("b", T.Bool) (Row ("x", T.Int) EmptyRow))
         let result = toHead row "x"
         case result of
-          Row "b" _ (Row "x" T.Int _) -> return ()
+          Row ("b", _) (Row ("x", T.Int) _) -> return ()
           _ -> assertFailure $ "Expected 'x' to be moved forward, got: " ++ show result,
       testCase "Single element row with matching label returns unchanged" $ do
-        let row = Row "x" T.Int EmptyRow
+        let row = Row ("x", T.Int) EmptyRow
         toHead row "x" @?= row,
-      testCase "Row ending in RowVar returns unchanged when label not found" $ do
-        let row = Row "a" T.Int (RowVar "r")
+      testCase "Row ending in Var returns unchanged when label not found" $ do
+        let row = Row ("a", T.Int) (T.Var "r")
         toHead row "x" @?= row
     ]
 
@@ -429,60 +429,60 @@ rowEqualityTests =
     [ -- Basic equality
       testCase "EmptyRow equals EmptyRow" $ do
         EmptyRow @?= EmptyRow,
-      testCase "RowVar equals same RowVar" $ do
-        RowVar "r" @?= RowVar "r",
-      testCase "RowVar does not equal different RowVar" $ do
-        assertBool "RowVar r /= RowVar s" (RowVar "r" /= RowVar "s"),
+      testCase "Var equals same Var" $ do
+        T.Var "r" @?= T.Var "r",
+      testCase "Var does not equal different Var" $ do
+        assertBool "Var r /= Var s" (T.Var "r" /= T.Var "s"),
       testCase "Single element row equals itself" $ do
-        let row = Row "x" T.Int EmptyRow
+        let row = Row ("x", T.Int) EmptyRow
         row @?= row,
       -- Reordering (distinct labels)
       testCase "Rows with distinct labels: reordering is equal {x:Int,y:Bool} == {y:Bool,x:Int}" $ do
-        let row1 = Row "x" T.Int (Row "y" T.Bool EmptyRow)
-        let row2 = Row "y" T.Bool (Row "x" T.Int EmptyRow)
+        let row1 = Row ("x", T.Int) (Row ("y", T.Bool) EmptyRow)
+        let row2 = Row ("y", T.Bool) (Row ("x", T.Int) EmptyRow)
         row1 @?= row2,
       testCase "Three element row reordering {a:Int,b:Bool,c:Int} == {c:Int,a:Int,b:Bool}" $ do
-        let row1 = Row "a" T.Int (Row "b" T.Bool (Row "c" T.Int EmptyRow))
-        let row2 = Row "c" T.Int (Row "a" T.Int (Row "b" T.Bool EmptyRow))
+        let row1 = Row ("a", T.Int) (Row ("b", T.Bool) (Row ("c", T.Int) EmptyRow))
+        let row2 = Row ("c", T.Int) (Row ("a", T.Int) (Row ("b", T.Bool) EmptyRow))
         row1 @?= row2,
       -- Inequality cases
       testCase "Different labels are not equal {x:Int} /= {y:Int}" $ do
-        let row1 = Row "x" T.Int EmptyRow
-        let row2 = Row "y" T.Int EmptyRow
+        let row1 = Row ("x", T.Int) EmptyRow
+        let row2 = Row ("y", T.Int) EmptyRow
         assertBool "{x:Int} /= {y:Int}" (row1 /= row2),
       testCase "Same label different types not equal {x:Int} /= {x:Bool}" $ do
-        let row1 = Row "x" T.Int EmptyRow
-        let row2 = Row "x" T.Bool EmptyRow
+        let row1 = Row ("x", T.Int) EmptyRow
+        let row2 = Row ("x", T.Bool) EmptyRow
         assertBool "{x:Int} /= {x:Bool}" (row1 /= row2),
       testCase "Different lengths not equal {x:Int,y:Bool} /= {x:Int}" $ do
-        let row1 = Row "x" T.Int (Row "y" T.Bool EmptyRow)
-        let row2 = Row "x" T.Int EmptyRow
+        let row1 = Row ("x", T.Int) (Row ("y", T.Bool) EmptyRow)
+        let row2 = Row ("x", T.Int) EmptyRow
         assertBool "different lengths" (row1 /= row2),
       -- Duplicate labels (order matters within same label)
       testCase "Duplicate labels same order are equal {x:Int,x:Bool} == {x:Int,x:Bool}" $ do
-        let row1 = Row "x" T.Int (Row "x" T.Bool EmptyRow)
-        let row2 = Row "x" T.Int (Row "x" T.Bool EmptyRow)
+        let row1 = Row ("x", T.Int) (Row ("x", T.Bool) EmptyRow)
+        let row2 = Row ("x", T.Int) (Row ("x", T.Bool) EmptyRow)
         row1 @?= row2,
       testCase "Duplicate labels swapped are NOT equal {x:Int,x:Bool} /= {x:Bool,x:Int}" $ do
-        let row1 = Row "x" T.Int (Row "x" T.Bool EmptyRow)
-        let row2 = Row "x" T.Bool (Row "x" T.Int EmptyRow)
+        let row1 = Row ("x", T.Int) (Row ("x", T.Bool) EmptyRow)
+        let row2 = Row ("x", T.Bool) (Row ("x", T.Int) EmptyRow)
         assertBool "{x:Int,x:Bool} /= {x:Bool,x:Int}" (row1 /= row2),
       testCase "Reorder non-duplicate doesn't cross duplicate {a:Int,x:Int,x:Bool} == {x:Int,a:Int,x:Bool}" $ do
-        let row1 = Row "a" T.Int (Row "x" T.Int (Row "x" T.Bool EmptyRow))
-        let row2 = Row "x" T.Int (Row "a" T.Int (Row "x" T.Bool EmptyRow))
+        let row1 = Row ("a", T.Int) (Row ("x", T.Int) (Row ("x", T.Bool) EmptyRow))
+        let row2 = Row ("x", T.Int) (Row ("a", T.Int) (Row ("x", T.Bool) EmptyRow))
         row1 @?= row2,
-      -- Mixed with RowVar
-      testCase "Row with same RowVar tail are equal" $ do
-        let row1 = Row "x" T.Int (RowVar "r")
-        let row2 = Row "x" T.Int (RowVar "r")
+      -- Mixed with Var
+      testCase "Row with same Var tail are equal" $ do
+        let row1 = Row ("x", T.Int) (T.Var "r")
+        let row2 = Row ("x", T.Int) (T.Var "r")
         row1 @?= row2,
-      testCase "Row with different RowVar tail are not equal" $ do
-        let row1 = Row "x" T.Int (RowVar "r")
-        let row2 = Row "x" T.Int (RowVar "s")
-        assertBool "different RowVar tails" (row1 /= row2),
+      testCase "Row with different Var tail are not equal" $ do
+        let row1 = Row ("x", T.Int) (T.Var "r")
+        let row2 = Row ("x", T.Int) (T.Var "s")
+        assertBool "different Var tails" (row1 /= row2),
       testCase "{ x : Int, y: Int} should not equal { x: v1 | r1 }" $ do
-        let row1 = T.Record $ Row "y" T.Int (Row "x" T.Int EmptyRow)
-        let row2 = T.Record $ Row "x" (T.Var "v1") (RowVar "r1")
+        let row1 = T.Record $ Row ("y", T.Int) (Row ("x", T.Int) EmptyRow)
+        let row2 = T.Record $ Row ("x", T.Var "v1") (T.Var "r1")
         assertBool "different types" (row1 /= row2)
     ]
 
@@ -530,20 +530,20 @@ genRowLabel = elements ["a", "b", "c", "x", "y", "z"]
 genSimpleType :: Gen Type
 genSimpleType = elements [T.Int, T.Bool]
 
-genRow :: Int -> Gen Row
-genRow 0 = frequency [(3, pure EmptyRow), (1, RowVar <$> genRowLabel)]
+genRow :: Int -> Gen Type
+genRow 0 = frequency [(3, pure EmptyRow), (1, T.Var <$> genRowLabel)]
 genRow n =
   frequency
     [ (1, pure EmptyRow),
-      (1, RowVar <$> genRowLabel),
-      (4, Row <$> genRowLabel <*> genSimpleType <*> genRow (n - 1))
+      (1, T.Var <$> genRowLabel),
+      (4, (\l t r -> Row (l, t) r) <$> genRowLabel <*> genSimpleType <*> genRow (n - 1))
     ]
 
-instance Arbitrary Row where
+instance Arbitrary Type where
   arbitrary = sized $ \n -> genRow (min n 4)
   shrink EmptyRow = []
-  shrink (RowVar _) = [EmptyRow]
-  shrink (Row _ _ r) = r : EmptyRow : shrink r
+  shrink (T.Var _) = [EmptyRow]
+  shrink (Row (_, _) r) = r : EmptyRow : shrink r
 
 standardEnv :: TypeEnv
 standardEnv =
