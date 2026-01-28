@@ -1,5 +1,5 @@
 name = "Polymorphic Composition Type Inference"
 phase = "eval"
 expect = "success"
-expected_type = "Int"
+expected_type = "TCon \"Int\" []"
 expected_value = "Lit (LitInt 3)"

@@ -2,6 +2,10 @@
 module Parser
   ( -- Ast
     TypeAnn,
+    Decl(..),
+    Type(..),
+    RecordRow(..),
+    EffectRow(..),
     Op (Add, And, Subtract, Or),
     Expr (Lit, Var, Lambda, App, If, BinOp, Let, Record),
     RecordExpr (RecordCstr, RecordAccess, RecordExtension),
@@ -71,6 +75,51 @@ instance Report RecordExpr where
   prettyPrint (RecordAccess expr lbl) = prettyPrint expr ++ "." ++ lbl
   prettyPrint (RecordExtension expr1 name expr2) = "{" ++ prettyPrint expr1 ++ " with " ++ name ++ " = " ++ prettyPrint expr2 ++ "}"
 
+{-
+ - We want to allow optional Type annotations.
+ - Our parse method should always start with a list [Decl]
+ - Each Declaration either gets mapped into our initial Type Environment,
+ -  or Effect Environment
+ - This gets combined with some builtin types / effects / values
+ - We need to map syntactic types to Inference Types
+ -
+ - So [Decl] = [EffectDecl] ++ [DataDecl] ++ [TypeDecl] ++ [LetDecl]
+ - getEffectInfo :: [Decl] -> Map String EffectInfo
+ - getTypeInfo :: [Decl] -> Map String Scheme ? TypeInfo?
+ -
+ -
+ -
+ -
+ -}
+
+data Type
+  = TVar String
+  | TInt
+  | TBool
+  | TCon String [Type]
+  | TFun Type Type EffectRow
+  | TRecord RecordRow
+  deriving (Show, Eq, Ord)
+
+data RecordRow
+  = REmptyRow
+  | RRowExtension
+  | RVar String
+  deriving (Show, Eq, Ord)
+
+data EffectRow
+  = EEmptyRow
+  | ERowExtension Type EffectRow
+  | EVar String
+  deriving (Show, Eq, Ord)
+
+data Decl
+  = EffectDecl String [String] [(String, Type)]
+  | LetDecl String (Maybe Type) Expr
+  | DataDecl String [(String, [Type])]
+  -- | TypeDecl String Type
+  deriving (Show, Eq, Ord)
+
 data Expr
   = Var String
   | Lambda String (Maybe TypeAnn) Expr
@@ -80,7 +129,23 @@ data Expr
   | BinOp Op Expr Expr
   | Let String Expr Expr
   | Record RecordExpr
+  -- TODO (kc): Can collapse the RecordExpression stuff into here.
+  -- Record [(String, Expr)]
+  -- Project Expr String
+  -- Extend String Expr Expr
   deriving (Show, Eq, Ord)
+
+-- effect Console {
+--   print : String -> ()
+--   println : String -> ()
+--   read : () -> String
+-- }
+--
+-- effect State a {
+--   get : () -> a
+--   put : a -> ()
+--
+-- }
 
 instance Report Expr where
   prettyPrint expr =
@@ -96,6 +161,7 @@ instance Report Expr where
 
 parse_all :: String -> Either ParseError Expr
 parse_all = parse parse_program ""
+
 
 parse_program :: Parser Expr
 parse_program = do
