@@ -77,6 +77,13 @@ effectConstraintTests =
           Left err -> assertFailure $ show err
           Right sub -> sub @?= Single (T.Var "e1", EmptyRow),
 
+      testCase "STUB: Simple Effect unification" $ do
+
+        let constraint = Equals (T.Var "e1", T.Var "e2")
+        case doSolve [constraint] of
+          Left err -> assertFailure $ show err
+          Right sub -> sub @?= Single (T.Var "e1", T.Var "e2"),
+
       testCase "STUB: Two effect variables unify" $ do
         let constraint = Equals (T.Var "e1", T.Var "e2")
         case doSolve [constraint] of

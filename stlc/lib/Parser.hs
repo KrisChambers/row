@@ -2,14 +2,14 @@
 module Parser
   ( -- Ast
     TypeAnn,
-    Decl(..),
-    Type(..),
-    RecordRow(..),
-    EffectRow(..),
+    Decl (..),
+    Type (..),
+    RecordRow (..),
+    EffectRow (..),
     Op (Add, And, Subtract, Or),
-    Expr (Lit, Var, Lambda, App, If, BinOp, Let, Record),
+    Expr (Lit, Var, Lambda, App, If, BinOp, Let, Record, Perform),
     RecordExpr (RecordCstr, RecordAccess, RecordExtension),
-    Literal (LitInt, LitBool),
+    Literal (LitInt, LitBool, LitString, LitUnit),
     Parser,
     -- Basic parsers
     literal,
@@ -32,12 +32,16 @@ module Parser
     parse_application,
     parse_program,
     parse_all,
+    typ,
+    effect_declaration,
+    let_declaration,
+    declarations
   )
 where
 
 import Control.Monad (void)
 import Data.Functor (($>))
-
+import Debug.Trace qualified as Tr
 import Report (Report (..))
 import Text.Parsec
 import Text.Parsec.String (Parser)
@@ -45,7 +49,7 @@ import Text.Parsec.String (Parser)
 data TypeAnn = Int | Bool | Fn TypeAnn TypeAnn
   deriving (Show, Eq, Ord)
 
-data Literal = LitInt Integer | LitBool Bool
+data Literal = LitInt Integer | LitBool Bool | LitString String | LitUnit
   deriving (Show, Eq, Ord)
 
 instance Report Literal where
@@ -53,6 +57,8 @@ instance Report Literal where
     case x of
       LitInt i -> show i
       LitBool i -> show i
+      LitString i -> i
+      LitUnit -> "()"
 
 data Op = Add | Subtract | And | Or
   deriving (Show, Eq, Ord)
@@ -86,10 +92,6 @@ instance Report RecordExpr where
  - So [Decl] = [EffectDecl] ++ [DataDecl] ++ [TypeDecl] ++ [LetDecl]
  - getEffectInfo :: [Decl] -> Map String EffectInfo
  - getTypeInfo :: [Decl] -> Map String Scheme ? TypeInfo?
- -
- -
- -
- -
  -}
 
 data Type
@@ -103,13 +105,13 @@ data Type
 
 data RecordRow
   = REmptyRow
-  | RRowExtension
+  | RRowExtension String Type RecordRow
   | RVar String
   deriving (Show, Eq, Ord)
 
 data EffectRow
   = EEmptyRow
-  | ERowExtension Type EffectRow
+  | ERowExtension String EffectRow
   | EVar String
   deriving (Show, Eq, Ord)
 
@@ -117,8 +119,12 @@ data Decl
   = EffectDecl String [String] [(String, Type)]
   | LetDecl String (Maybe Type) Expr
   | DataDecl String [(String, [Type])]
-  -- | TypeDecl String Type
-  deriving (Show, Eq, Ord)
+  deriving
+    ( -- | TypeDecl String Type
+      Show,
+      Eq,
+      Ord
+    )
 
 data Expr
   = Var String
@@ -129,23 +135,12 @@ data Expr
   | BinOp Op Expr Expr
   | Let String Expr Expr
   | Record RecordExpr
+  | Perform String String Expr -- perform E.op e
   -- TODO (kc): Can collapse the RecordExpression stuff into here.
   -- Record [(String, Expr)]
   -- Project Expr String
   -- Extend String Expr Expr
   deriving (Show, Eq, Ord)
-
--- effect Console {
---   print : String -> ()
---   println : String -> ()
---   read : () -> String
--- }
---
--- effect State a {
---   get : () -> a
---   put : a -> ()
---
--- }
 
 instance Report Expr where
   prettyPrint expr =
@@ -158,10 +153,129 @@ instance Report Expr where
       BinOp op l r -> "( " ++ prettyPrint l ++ ") " ++ prettyPrint op ++ " ( " ++ prettyPrint r ++ " )"
       Let var assign body -> "let " ++ var ++ " = " ++ prettyPrint assign ++ " in " ++ prettyPrint body
       Record rexpr -> prettyPrint rexpr
+      Perform a b c -> "perform " ++ a ++ "." ++ b ++ " " ++ prettyPrint c
+
+upperIdent :: Parser String
+upperIdent = do
+  start <- upper
+  rest <- identifier
+  return $ start : rest
+
+lowerIdent :: Parser String
+lowerIdent = identifier
+
+typeCon :: Parser Type
+typeCon = do
+  name <- upperIdent <|> string "()"
+  return $ TCon name []
+
+typeVar :: Parser Type
+typeVar = TVar <$> lowerIdent
+
+row_inner :: Parser RecordRow
+row_inner = do
+  let entry = do
+        name <- identifier
+        _ <- opt_space >> char ':'
+        t <- opt_space >> typ
+
+        return (name, t)
+
+  -- first <- optionMaybe entry
+  entries <- entry `sepBy` try (symbol (char ',') >> opt_space)
+
+  return $ case entries of
+    [] -> REmptyRow
+    es -> foldl (\a (l, lt) -> RRowExtension l lt a) REmptyRow es
+
+  -- return $ case first of
+  --   Nothing -> REmptyRow
+  --   Just (l, lt) -> RRowExtension l lt REmptyRow
+
+-- Just e -> foldl (\a (l, lt) -> RRowExtension l lt a) REmptyRow es
+
+-- TODO: (kc): It looks like when we try to parse the next type in entry we are not failing soon enough
+--        So we are seeing a "unexpected }" expected space, lowercase letter or "{". This is clearly coming from the
+--        typeAtom parser. We might have to do something like what we did with the functions.
+row :: Parser Type
+row = (TRecord <$> row_inner) <|> return (TRecord REmptyRow)
+
+braces :: Parser a -> Parser a
+braces p = symbol start_rec >> opt_space >> p <* symbol (char '}')
+
+symbol :: Parser a -> Parser a
+symbol p = opt_space >> p
+
+parens :: Parser a -> Parser a
+parens p = symbol (char '(') >> opt_space >> p <* symbol (char ')')
+
+typeAtom :: Parser Type
+typeAtom =
+  choice
+    [ typeVar,
+      typeCon,
+      braces row,
+      parens typ
+    ]
+
+typeApp :: Parser Type
+typeApp = do
+  first <- typeAtom
+  rest <- many (try (notFollowedBy (symbol arrow) *> opt_space *> typeAtom))
+  return $ foldl applyType first rest
+  where
+    applyType (TCon n args) arg = TCon n (args ++ [arg])
+    applyType _ _ = error "Type application to non-constructor"
+
+typ :: Parser Type
+typ = do
+  t <- typeApp
+  rest <- optionMaybe (try (opt_space >> arrow >> opt_space >> typ))
+  eff <- pure EEmptyRow
+  return $ case rest of
+    Nothing -> t
+    Just s -> TFun t s eff
+
+effect_declaration :: Parser Decl
+effect_declaration = do
+  _ <- opt_space >> keyword "effect"
+  name <- opt_space >> upperIdent
+  params <- many (try (notFollowedBy (symbol start_rec) >> opt_space >> lowerIdent))
+  _ <- opt_space >> start_rec
+
+  let operation_definition = do
+        op_name <- opt_space >> lowerIdent <* opt_space <* char ':'
+        t <- opt_space >> typ
+
+        return (op_name, t)
+
+  ops <- operation_definition `sepBy` try (opt_space >> char ',')
+  _ <- opt_space >> end_rec
+
+  return $ EffectDecl name params ops
+
+let_declaration :: Parser Decl
+let_declaration = do
+  _ <- opt_space >> keyword "let"
+  name <- opt_space >> lowerIdent
+  t <- opt_space >> optionMaybe (char ':' >> opt_space >> typ)
+  _ <- opt_space >> char '='
+  expr <- opt_space >> parse_expr
+
+  return $ LetDecl name t expr
+
+
+declaration :: Parser Decl
+declaration = do
+   try effect_declaration
+  <|> try let_declaration
+--   -- <|> try data_declaration
+
+declarations :: Parser [Decl]
+declarations = many declaration
 
 parse_all :: String -> Either ParseError Expr
 parse_all = parse parse_program ""
-
 
 parse_program :: Parser Expr
 parse_program = do
@@ -214,7 +328,7 @@ opt_space = void (many space)
 
 identifier :: Parser String
 identifier = do
-  prefix <- letter
+  prefix <- lower
   remaining <- try (many1 alphaNum <|> string "_") <|> return ""
 
   let ident = prefix : remaining

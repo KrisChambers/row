@@ -65,6 +65,7 @@ library
         Type,
         Type.Inference,
         Type.Substitution,
+        Type.Environment,
         Interpreter,
         Report
 
