@@ -1,7 +1,6 @@
 module Interpreter (eval, evalExpr, Env, EvaluationError, Value (RInt, RBool, RFunc)) where
 
 import Control.Monad (ap, when, (>=>))
-import Control.Monad.Except
 import Data.Map (Map, (!), (!?))
 import Data.Map qualified as Map
 import Debug.Trace qualified as Tr
@@ -79,17 +78,6 @@ data EvaluationError
   = Error String
   | MissingValue String
   deriving (Show)
-
--- isolated :: Eval Value -> Eval Value
--- isolated action = do
---   original <- get
---   action
---     <* put original `catchError` \e -> do
---       put original
---       throwError e
-
-liftMaybe :: (MonadError e m) => e -> Maybe a -> m a
-liftMaybe err = maybe (throwError err) return
 
 evalExpr :: Expr -> Either EvaluationError Value
 evalExpr expr = case s of
