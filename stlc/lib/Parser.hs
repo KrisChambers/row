@@ -2,6 +2,8 @@
 module Parser
   ( -- Ast
     TypeAnn,
+    OpClause (..),
+    Handler (..),
     Decl (..),
     Type (..),
     RecordRow (..),
@@ -46,6 +48,7 @@ import Debug.Trace qualified as Tr
 import Report (Report (..))
 import Text.Parsec
 import Text.Parsec.String (Parser)
+import Data.Map (Map)
 
 data TypeAnn = Int | Bool | Fn TypeAnn TypeAnn
   deriving (Show, Eq, Ord)
@@ -127,9 +130,29 @@ data Decl
       Ord
     )
 
-data Handler
-  = EffectHandle String String String String Expr
-  | ReturnHandle String Expr
+
+{-
+ - handle (expr) with {
+ -    State.get k -> \s -> (k s) s,
+ -    State.set k v -> (k ()) v,
+ -    return x -> \s -> { value = x, state = s }
+ - }
+ -
+ - handle (expr) with {
+ -    Console.print k msg -> \log -> (k ()) (Cons msg log),
+ -    Console.read k      -> \log -> (k 0) log,
+ -    return x            -> \log -> { result = x, log = log }
+ -
+ - }
+ -}
+
+data OpClause = OpClause [String] String Expr
+  deriving (Show, Eq, Ord)
+
+data Handler = Handler
+  { retClause :: (String, Expr)
+  , opClause :: Map (String, String) OpClause
+  }
   deriving (Show, Eq, Ord)
 
 data Expr
@@ -142,7 +165,7 @@ data Expr
   | Let String Expr Expr
   | Record RecordExpr
   | Perform String String Expr -- perform E.op e
-  | Handle Expr [Handler]
+  | Handle Expr Handler
   -- TODO (kc): Can collapse the RecordExpression stuff into here.
   -- Record [(String, Expr)]
   -- Project Expr String
@@ -163,42 +186,42 @@ instance Report Expr where
       Perform a b c -> "perform " ++ a ++ "." ++ b ++ " " ++ prettyPrint c
       Handle e handler -> "handle " ++ prettyPrint e ++ " with " ++ "TODO: HANDLER"
 
-handles :: Parser [Handler]
-handles = do
-  let effHandle = do
-        _ <- char '|'
-        eff <- opt_space >> upperIdent
-        _ <- opt_space >> char '.'
-        op_name <- opt_space >> lowerIdent
-        arg1 <- opt_space >> lowerIdent
-        arg2 <- opt_space >> lowerIdent
-        _ <- opt_space >> arrow
-
-        expr <- opt_space >> parse_expr
-
-        return $ EffectHandle eff op_name arg1 arg2 expr
-
-  let returnHandle = do
-        _ <- char '|' >> opt_space >> keyword "return"
-        v <- opt_space >> lowerIdent
-        _ <- opt_space >> arrow
-        e <- opt_space >> parse_expr
-
-        return $ ReturnHandle v e
-
-  eHandles <- opt_space >> many (notFollowedBy (opt_space >> char '|' >> opt_space >> keyword "return") >> try (opt_space >> effHandle))
-  rHandle <- opt_space >> returnHandle
-
-  return $ rHandle:eHandles
-
-handler :: Parser Expr
-handler = do
-  _ <- keyword "handle"
-  eff <- opt_space >> parse_expr
-  _ <- opt_space >> keyword "with"
-  h <- opt_space >> handles
-
-  return $ Handle eff h
+-- handles :: Parser [Handler]
+-- handles = do
+--   let effHandle = do
+--         _ <- char '|'
+--         eff <- opt_space >> upperIdent
+--         _ <- opt_space >> char '.'
+--         op_name <- opt_space >> lowerIdent
+--         arg1 <- opt_space >> lowerIdent
+--         arg2 <- opt_space >> lowerIdent
+--         _ <- opt_space >> arrow
+--
+--         expr <- opt_space >> parse_expr
+--
+--         return $ EffectHandle eff op_name arg1 arg2 expr
+--
+--   let returnHandle = do
+--         _ <- char '|' >> opt_space >> keyword "return"
+--         v <- opt_space >> lowerIdent
+--         _ <- opt_space >> arrow
+--         e <- opt_space >> parse_expr
+--
+--         return $ ReturnHandle v e
+--
+--   eHandles <- opt_space >> many (notFollowedBy (opt_space >> char '|' >> opt_space >> keyword "return") >> try (opt_space >> effHandle))
+--   rHandle <- opt_space >> returnHandle
+--
+--   return $ rHandle:eHandles
+--
+-- handler :: Parser Expr
+-- handler = do
+--   _ <- keyword "handle"
+--   eff <- opt_space >> parse_expr
+--   _ <- opt_space >> keyword "with"
+--   h <- opt_space >> handles
+--
+--   return $ Handle eff h
 
 upperIdent :: Parser String
 upperIdent = do
@@ -419,7 +442,7 @@ parse_expr :: Parser Expr
 parse_expr =
   try parse_let
     <|> try parse_record_creation
-    <|> try handler
+    -- <|> try handler
     <|> try parse_if
     <|> try parse_lambda
     <|> try parse_binary_expr
