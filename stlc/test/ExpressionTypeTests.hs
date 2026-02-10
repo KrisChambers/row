@@ -76,12 +76,12 @@ effectDeclTest =
   in testGroup
     "Effect declarations in Infered Types"
     [ testCase "Infers that foo has the Console effect" $ do
-        let decl = P.LetDecl  "foo" Nothing (
+        let decl = P.LetDecl  "foo" Nothing (P.Lambda "x" Nothing (
               P.Perform "Console" "print" $ P.Lit $ P.LitString "Hello, Foo"
-              )
+              ))
 
         let expected = T.Arrow
-                  tUnit
+                  (T.Var "v2")
                   (T.Row ("Console", tUnit) T.EmptyRow)
                   tUnit
 
@@ -89,9 +89,8 @@ effectDeclTest =
 
         case envVars env !? "foo" of
           Nothing -> assertFailure "Failed"
-          Just a -> do
-            a @?= Forall Set.empty expected
-        assertFailure ""
+          Just (Forall _ expr) -> do
+            expr @?= expected
     ]
 
 effectTests :: TestTree

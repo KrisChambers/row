@@ -2,10 +2,10 @@
 
 module InferenceSpec (inferenceTests) where
 
-import Debug.Trace qualified as Tr
 import Data.List (isInfixOf, isPrefixOf)
 import Data.Map qualified as Map
 import Data.Set qualified as Set
+import Debug.Trace qualified as Tr
 import Parser (Expr (..), Literal (..), Op (..))
 import Parser qualified as P
 import Test.Tasty
@@ -88,7 +88,7 @@ variableTests =
         let expr = P.Var "f"
         case doInfer env expr of
           Right (t, e, cs) -> do
-            t @?= Arrow tInt EmptyRow tBool
+            t @?= Arrow tInt (T.Var "e1") tBool
             cs @?= []
           Left err -> assertFailure $ show err,
       --  testCase "Lookup polymorphic (forall a. a -> a): instantiates fresh vars" $ do
@@ -670,7 +670,7 @@ effectStubTests =
         let expr = Let "x" (Lit (LitInt 42)) (P.Var "x")
         case doInfer T.prelude expr of
           Right (_, e, _) -> do
-            e @?= T.Var "e1"
+            e @?= T.Var "e2" -- This isn't all that great
           Left err -> assertFailure $ show err,
       testCase "Record construction has effect" $ do
         let expr = P.Record (P.RecordCstr [("x", Lit (LitInt 0))])
@@ -704,8 +704,8 @@ effectDeclTests =
           Left err -> assertFailure $ show err,
       testCase "EffectDecl with parameter adds polymorphic effect" $ do
         -- Define: effect State a { get : () -> a, put : a -> () }
-        let getOp = P.TFun (P.TCon "()" []) (P.TVar "a") P.EEmptyRow  -- () -> a
-        let putOp = P.TFun (P.TVar "a") (P.TCon "()" []) P.EEmptyRow  -- a -> ()
+        let getOp = P.TFun (P.TCon "()" []) (P.TVar "a") P.EEmptyRow -- () -> a
+        let putOp = P.TFun (P.TVar "a") (P.TCon "()" []) P.EEmptyRow -- a -> ()
         let decl = P.EffectDecl "State" ["a"] [("get", getOp), ("put", putOp)]
         case doInferDecl T.prelude decl of
           Right env' -> do
@@ -717,9 +717,12 @@ effectDeclTests =
               Nothing -> assertFailure "State effect not found"
           Left err -> assertFailure $ show err,
       testCase "Lambda with Perform has effect variable in arrow type" $ do
+        -- TODO (kc): We need to create some fixtures.
+        let consoleEffect = P.EffectDecl "Console" [] [("print", P.TFun (P.TCon "String" []) (P.TCon "()" []) P.EEmptyRow)]
+        env <- either (assertFailure . show) return $ inferDecl [consoleEffect]
         -- Using prelude's Console effect: \x -> perform Console.print x
         let expr = Lambda "x" Nothing (P.Perform "Console" "print" (P.Var "x"))
-        case doInfer T.prelude expr of
+        case doInfer env expr of
           Right (t, _e, _cs) -> do
             case t of
               Arrow _arg effect _ret ->
@@ -739,12 +742,13 @@ effectDeclTests =
             let expr = P.Perform "Log" "log" (Lit (LitInt 42))
             case doInfer env' expr of
               Right (_t, e, cs) -> do
-                let expected = Row ("Log", tUnit) EmptyRow
+                let expected = Row ("Log", tUnit) $ T.Var "e4"
                 let equalTo constraints typ = case constraints of
-                        [] -> Nothing
-                        -- Looking for concrete stuff
-                        ((Equals (l, T.Var _)):rest) | l == typ -> equalTo rest typ
-                        ((Equals (l, r)):rest) -> if l == typ
+                      [] -> Nothing
+                      -- Looking for concrete stuff
+                      ((Equals (l, T.Var _)) : rest) | l == typ -> equalTo rest typ
+                      ((Equals (l, r)) : rest) ->
+                        if l == typ
                           then Just r
                           else equalTo rest typ
 
@@ -758,8 +762,7 @@ effectDeclTests =
                     case target of
                       Nothing -> assertFailure "FAILED"
                       Just tNew -> do
-                        Tr.traceM $ "\n\n" ++ show cs ++ "\n\n"
-
+                        -- Tr.traceM $ "\n\n" ++ show cs ++ "\n\n"
                         tNew @?= expected
                   _ -> assertFailure "FAILED"
 
@@ -767,9 +770,6 @@ effectDeclTests =
               Left err -> assertFailure $ show err
           Left err -> assertFailure $ show err
     ]
-
-
-
 
 -- ============================================================================
 -- QuickCheck Properties

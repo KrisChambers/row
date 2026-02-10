@@ -35,23 +35,13 @@ import Data.Map (Map, (!?), (!))
 import Data.Map qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
--- import Parser qualified as P (Expr, Literal (LitBool, LitInt), Op (Add, And, Or, Subtract))
 import Parser qualified as Expr (Expr (..))
 import Parser qualified as RecordExpr (RecordExpr (..))
 import Parser qualified as P
 import Report (Report (..))
 import Data.Bifunctor (bimap)
-
--- import Control.Monad (when)
--- import Debug.Trace qualified as Tr
-
-import Control.Monad (foldM)
--- import Data.List (find)
--- enableTrace :: Bool
--- enableTrace = False
---
--- traceM :: (Applicative f) => String -> f ()
--- traceM message = when enableTrace $ Tr.traceM message
+import Debug.Trace qualified as Tr
+import Control.Monad (foldM, when)
 
 --- Basic Types
 -- t := Int
@@ -131,7 +121,7 @@ prelude = TypeEnv
   --         ("read", Forall Set.empty $ Arrow tUnit eConsole tString)
   --       ])
   --   ]
-  , envVars = Map.empty
+  , envVars = Map.fromList [("()", Forall Set.empty tUnit)]
   , envCstors = Map.fromList
       [ ("True", CtorInfo "Bool" (Forall Set.empty tBool))
       , ("False", CtorInfo "Bool" (Forall Set.empty tBool))
@@ -157,7 +147,6 @@ transformType = \case
         P.RRowExtension label t rTail -> Row (label, transformType t) $ recordRow rTail
         P.RVar name -> Var name
 
--- inferType :: P.Expr -> Either TypeError (Type, Type)
 inferDecl :: [P.Decl] -> Either TypeError TypeEnv
 inferDecl ds =
   let inferDecls decls = do
@@ -179,6 +168,7 @@ addDeclToEnv env = \case
       (tExpr, eExpr, cExpr) <- infer new_env expr
 
       let result = evalState (runExceptT $ solve cExpr) IdSub
+      --Tr.traceM $ "\n\n=================== BOOP =================\n" ++ show result ++ "\n\n"
 
       eExprGen <- case result of
           Left err -> do
@@ -324,13 +314,22 @@ fresh varType = do
         RVar -> s { row = v }
         EVar -> s { effect = v }
 
+  let getter = case varType of
+        TVar -> var
+        RVar -> row
+        EVar -> effect
+
   let prefix = case varType of
         TVar -> "v"
         RVar -> "r"
         EVar -> "e"
 
-  n <- gets var >>= \n' -> return $ n' + 1
-  _ <- puts setV n
+  let nextVar = do
+        n <- gets getter >>= \a -> return $ a + 1
+        _ <- puts setV n
+        return  n
+
+  n <- nextVar
 
   return $ prefix ++ show n
 
@@ -350,12 +349,8 @@ freeVars t = case t of
   EmptyRow -> Set.empty
 
 newvar :: Monad m => String -> m Type
+
 newvar s = return $ Var s
-
-
--- inferDecl :: TypeEnv -> [P.Decl] -> Infer (Type, Type, [Constraint])
--- inferDecl env decls = do
-  -- Assuming only Lets right now
 
 
 
@@ -520,18 +515,19 @@ infer env = \case
     -- With microsofts proposal we have a simplified inference since we allow "scoped" labels
     return (result_t, ext_e, cl ++ cr ++ [Equals (expected_t, base_t), Equals (base_e, ext_e) ])
 
+  -- "e3" = (| "Console" | e3 |)
   Expr.Perform effect op arg  -> do
     fresh_t <- fresh TVar >>= newvar
-    fresh_e <- fresh EVar >>= newvar
+    fresh_e <- fresh EVar >>= newvar -- e3
+    --Tr.traceM $ "\n\n================= BLEEP ============= \n" ++ prettyPrint fresh_e ++ "\n\n"
     -- At this point we are just throwing an error if there is no effect info
     let effectInfo = envEffects env ! effect
     opType <- instantiate (effectInfoOps effectInfo ! op)
 
-    -- Tr.traceM $ "\n>>>" ++ show opType
 
     (tArg, eArg, cArg) <- infer env arg
 
-    let t = Arrow tArg fresh_e fresh_t
+    let t = Arrow tArg fresh_e fresh_t -- String - (| e3 |) -> ()
 
     -- I think this needs to be something like
     -- (tArg, eArg, cArg) <- infer env arg
@@ -550,11 +546,36 @@ infer env = \case
 
     return (fresh_t, fresh_e, cArg ++ effect_c)
 
+  Expr.Handle _ _ -> do
+    -- This need to push the handlers onto a stack... stack of what?
+    throwError $ InferenceError "Handle : Not implemented"
+
+{-
+ - effect Console {
+ -  print : String -> ()
+ - }
+ -
+ - let foo = \ -> perform Console.print "Hello, World"
+ -
+ - let main = \ ->
+ -    handle foo ()
+ -      | Console.print k -> k ()
+ -      | return x -> x
+ -
+ -
+ -
+ -
+ -
+ - -}
+
+
+
 generalize :: Type -> Scheme
-generalize t = Forall vars t
+generalize t = Forall vars closed_t
   where
+    closed_t = closeType t
     vars = case t of
-      Arrow {} -> freeVars t
+      Arrow {} -> freeVars closed_t
       _ -> Set.empty
 
 -- TODO (kc): This needs some tests.
@@ -650,4 +671,24 @@ instantiate (Forall vars base) = do
 
   let vs = map (bimap Var Var) $ Map.toList new_vars
 
-  return $ apply (Composed vs) base
+  let instantiated = apply (Composed vs) base
+
+  openType instantiated
+
+openType :: Type -> Infer Type
+openType = \case
+  EmptyRow -> fresh EVar >>= newvar
+  Row s next -> openType next >>= \new -> return $ Row s new
+  Arrow t1 e t2 -> openType e >>= \new -> return $ Arrow t1 new t2
+  -- Record r -> openType r >>= \new -> return $ Record new
+  t -> return t
+
+closeType :: Type -> Type
+closeType = \case
+  Var name | (head name) == 'e' -> EmptyRow
+  Row s (Var _) -> Row s EmptyRow
+  Arrow t1 e t2 -> Arrow t1 (closeType e) t2
+  -- Record r -> Record $ closeType r
+  t -> t
+
+

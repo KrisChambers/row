@@ -7,7 +7,7 @@ module Parser
     RecordRow (..),
     EffectRow (..),
     Op (Add, And, Subtract, Or),
-    Expr (Lit, Var, Lambda, App, If, BinOp, Let, Record, Perform),
+    Expr (Lit, Var, Lambda, App, If, BinOp, Let, Record, Perform, Handle),
     RecordExpr (RecordCstr, RecordAccess, RecordExtension),
     Literal (LitInt, LitBool, LitString, LitUnit),
     Parser,
@@ -35,7 +35,8 @@ module Parser
     typ,
     effect_declaration,
     let_declaration,
-    declarations
+    declarations,
+    data_declaration,
   )
 where
 
@@ -126,6 +127,11 @@ data Decl
       Ord
     )
 
+data Handler
+  = EffectHandle String String String String Expr
+  | ReturnHandle String Expr
+  deriving (Show, Eq, Ord)
+
 data Expr
   = Var String
   | Lambda String (Maybe TypeAnn) Expr
@@ -136,6 +142,7 @@ data Expr
   | Let String Expr Expr
   | Record RecordExpr
   | Perform String String Expr -- perform E.op e
+  | Handle Expr [Handler]
   -- TODO (kc): Can collapse the RecordExpression stuff into here.
   -- Record [(String, Expr)]
   -- Project Expr String
@@ -154,15 +161,56 @@ instance Report Expr where
       Let var assign body -> "let " ++ var ++ " = " ++ prettyPrint assign ++ " in " ++ prettyPrint body
       Record rexpr -> prettyPrint rexpr
       Perform a b c -> "perform " ++ a ++ "." ++ b ++ " " ++ prettyPrint c
+      Handle e handler -> "handle " ++ prettyPrint e ++ " with " ++ "TODO: HANDLER"
+
+handles :: Parser [Handler]
+handles = do
+  let effHandle = do
+        _ <- char '|'
+        eff <- opt_space >> upperIdent
+        _ <- opt_space >> char '.'
+        op_name <- opt_space >> lowerIdent
+        arg1 <- opt_space >> lowerIdent
+        arg2 <- opt_space >> lowerIdent
+        _ <- opt_space >> arrow
+
+        expr <- opt_space >> parse_expr
+
+        return $ EffectHandle eff op_name arg1 arg2 expr
+
+  let returnHandle = do
+        _ <- char '|' >> opt_space >> keyword "return"
+        v <- opt_space >> lowerIdent
+        _ <- opt_space >> arrow
+        e <- opt_space >> parse_expr
+
+        return $ ReturnHandle v e
+
+  eHandles <- opt_space >> many (notFollowedBy (opt_space >> char '|' >> opt_space >> keyword "return") >> try (opt_space >> effHandle))
+  rHandle <- opt_space >> returnHandle
+
+  return $ rHandle:eHandles
+
+handler :: Parser Expr
+handler = do
+  _ <- keyword "handle"
+  eff <- opt_space >> parse_expr
+  _ <- opt_space >> keyword "with"
+  h <- opt_space >> handles
+
+  return $ Handle eff h
 
 upperIdent :: Parser String
 upperIdent = do
   start <- upper
-  rest <- identifier
+  rest <- try identifier <|> return ""
   return $ start : rest
 
 lowerIdent :: Parser String
-lowerIdent = identifier
+lowerIdent = do
+  start <- lower
+  rest <- try identifier <|> return ""
+  return $ start : rest
 
 typeCon :: Parser Type
 typeCon = do
@@ -181,16 +229,15 @@ row_inner = do
 
         return (name, t)
 
-  -- first <- optionMaybe entry
   entries <- entry `sepBy` try (symbol (char ',') >> opt_space)
 
   return $ case entries of
     [] -> REmptyRow
     es -> foldl (\a (l, lt) -> RRowExtension l lt a) REmptyRow es
 
-  -- return $ case first of
-  --   Nothing -> REmptyRow
-  --   Just (l, lt) -> RRowExtension l lt REmptyRow
+-- return $ case first of
+--   Nothing -> REmptyRow
+--   Just (l, lt) -> RRowExtension l lt REmptyRow
 
 -- Just e -> foldl (\a (l, lt) -> RRowExtension l lt a) REmptyRow es
 
@@ -264,11 +311,29 @@ let_declaration = do
 
   return $ LetDecl name t expr
 
+data_declaration :: Parser Decl
+data_declaration = do
+  _ <- opt_space >> keyword "data"
+  name <- opt_space >> upperIdent
+  -- data type params go here?
+  _ <- opt_space >> char '='
+
+  let cstr = do
+        first <- opt_space >> upperIdent
+        rest <- many (try $ opt_space >> typ)
+
+        return (first, rest)
+
+  cstrs <- cstr `sepBy` try (opt_space >> char '|' >> opt_space)
+
+  return $ DataDecl name cstrs
 
 declaration :: Parser Decl
-declaration = do
-   try effect_declaration
-  <|> try let_declaration
+declaration =
+  do
+    try effect_declaration
+    <|> try let_declaration
+
 --   -- <|> try data_declaration
 
 declarations :: Parser [Decl]
@@ -328,7 +393,7 @@ opt_space = void (many space)
 
 identifier :: Parser String
 identifier = do
-  prefix <- lower
+  prefix <- letter
   remaining <- try (many1 alphaNum <|> string "_") <|> return ""
 
   let ident = prefix : remaining
@@ -354,6 +419,7 @@ parse_expr :: Parser Expr
 parse_expr =
   try parse_let
     <|> try parse_record_creation
+    <|> try handler
     <|> try parse_if
     <|> try parse_lambda
     <|> try parse_binary_expr
