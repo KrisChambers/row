@@ -80,15 +80,15 @@ data EvaluationError
 
 type Eval a = ExceptT EvaluationError (State Env) a
 
-valueOf :: String -> Eval Value
-valueOf name = do
-  env <- get
-  return $ env ! name
-
-setValue :: String -> Value -> Eval ()
-setValue name value = do
-  env <- get
-  put $ Map.insert name value env
+-- valueOf :: String -> Eval Value
+-- valueOf name = do
+--   env <- get
+--   return $ env ! name
+--
+-- setValue :: String -> Value -> Eval ()
+-- setValue name value = do
+--   env <- get
+--   put $ Map.insert name value env
 
 isolated :: Eval Value -> Eval Value
 isolated action = do
@@ -104,15 +104,15 @@ liftMaybe err = maybe (throwError err) return
 evalExpr :: Expr -> Either EvaluationError Value
 evalExpr expr = evalState s Map.empty
   where
-    s = runExceptT $ eval expr
+    s = runExceptT $ eval Map.empty expr
 
 --- Evaluates an expression through term substitutions
-eval :: Expr -> Eval Value
-eval (Var a) = valueOf a
-eval (Lambda name _ body) = gets (RFunc name body)
-eval (BinOp op left right) = do
-  lvalue <- eval left
-  rvalue <- eval right
+eval :: Env -> Expr -> Eval Value
+eval env (Var a) = return $ env ! a
+eval env (Lambda name _ body) = return $ RFunc name body env
+eval env (BinOp op left right) = do
+  lvalue <- eval env left
+  rvalue <- eval env right
 
   liftMaybe (Error "oops") $ case (lvalue, rvalue) of
     (RInt l, RInt r) -> case op of
@@ -124,57 +124,53 @@ eval (BinOp op left right) = do
       Or -> Just $ RBool $ l || r
       _ -> Nothing
     _ -> Nothing
-eval (Lit l) = return $ case l of
+eval _ (Lit l) = return $ case l of
   LitBool b -> RBool b
   LitInt i -> RInt i
   LitString s -> RString s
   LitUnit -> RUnit
-eval (Let name assign body) = do
-  traceM $ "\n" ++ name ++ " = " ++ show assign ++ " in " ++ show body
-  env <- get
-  assign_value <- eval assign
-  put $ Map.insert name assign_value env
-
-  eval body
-eval (If cond l_expr r_expr) =
-  eval cond >>= \case
-    RBool True -> eval l_expr
-    RBool False -> eval r_expr
+eval env (Let name assign body) = do
+  assign_value <- eval env assign
+  eval (Map.insert name assign_value env) body
+eval env (If cond l_expr r_expr) =
+  eval env cond >>= \case
+    RBool True -> eval env l_expr
+    RBool False -> eval env r_expr
     _ -> throwError (Error "Type Error: Conditon must be a boolean")
-eval (App f arg) = do
+eval env (App f arg) = do
   -- We need to handle the App rule of evaluation properly
   -- (\x.e1) e2 |- e1[x->e2]
 
-  f_value <- eval f
-  arg_v <- eval arg
+  f_value <- eval env f
+  arg_v <- eval env arg
 
   let get_return_action = do
         case f_value of
-          RFunc name body env -> do
-            put env -- Set the evaluation environment
-            setValue name arg_v -- bind arg_v to the function name
-            eval body
+          RFunc name body env' -> do
+            -- put env -- Set the evaluation environment
+            -- setValue name arg_v -- bind arg_v to the function name
+            eval (Map.insert name arg_v env') body
           _ -> throwError . Error $ "Can not apply" ++ show f_value ++ " to " ++ show arg_v
 
   isolated get_return_action
 
-eval (Record (RecordCstr ls)) = do
+eval env (Record (RecordCstr ls)) = do
   let eval_map (l, e) = do
-        expr <- eval e
+        expr <- eval env e
         return (l, expr)
 
   rows <- mapM eval_map ls
   return $ RRecord rows
-eval (Record (RecordExtension e1 l e2)) = do
-  v1 <- eval e1
-  v2 <- eval e2
+eval env (Record (RecordExtension e1 l e2)) = do
+  v1 <- eval env e1
+  v2 <- eval env e2
 
   case v1 of
     RRecord lbls -> do
       return $ RRecord $ (l, v2) : lbls
     _ -> throwError $ Error "Extending records"
-eval (Record (RecordAccess e b)) = do
-  r <- eval e
+eval env (Record (RecordAccess e b)) = do
+  r <- eval env e
 
   case r of
     RRecord lbls -> do
@@ -182,8 +178,8 @@ eval (Record (RecordAccess e b)) = do
         Nothing -> throwError (Error $ "Could not find a value for " ++ show b)
         Just v -> return v
     _ -> throwError $ Error "Accessing Records"
-eval (Perform eff op expr) = do
-  v <- eval expr
+eval env (Perform eff op expr) = do
+  v <- eval env expr
   throwError $ Error "Not Implemented"
-eval (Handle expr hdlrs) = do
+eval env (Handle expr hdlrs) = do
   throwError $ Error "Not Implemented"
