@@ -1,4 +1,5 @@
-let getAge = \r -> r.age;
+let getAge = \r -> r.age
+
 let main =
   let person = { fingers = 5, age = 1 }
   in

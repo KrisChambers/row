@@ -1,3 +1,5 @@
-let apply = \f -> \x -> f x;
-let id = \y -> y;
+let apply = \f -> \x -> f x
+
+let id = \y -> y
+
 let main = (apply id) 5

@@ -6,6 +6,7 @@ import InferenceSpec (inferenceTests)
 import ConstraintSolveSpec (constraintSolveTests)
 import ExpressionTypeTests (expressionTypeTests)
 import ParseTest (parseTests)
+import EffectTests (effectTests)
 
 main :: IO ()
 main = do
@@ -16,4 +17,5 @@ main = do
         , inferenceTests
         , constraintSolveTests
         , expressionTypeTests
+        , effectTests
         ]

@@ -1,0 +1,14 @@
+effect LuckyNumber {
+  get : () -> Int
+}
+
+let getNumber = \unused ->
+    perform LuckyNumber.get ()
+
+let main = \unused ->
+    handle getNumber () with {
+      LuckyNumber.get k  -> k 42,
+      return x -> x
+    }
+
+

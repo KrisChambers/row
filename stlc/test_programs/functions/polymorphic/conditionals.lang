@@ -1,4 +1,7 @@
-let id = \x -> x;
-let add1 = \x -> x + 1;
-let choose = \b -> if b then id else add1;
+let id = \x -> x
+
+let add1 = \x -> x + 1
+
+let choose = \b -> if b then id else add1
+
 let main = (choose true 42) + (choose false 1)

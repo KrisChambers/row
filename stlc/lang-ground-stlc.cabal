@@ -125,7 +125,8 @@ test-suite lang-ground-stlc-test
                     InferenceSpec,
                     ConstraintSolveSpec,
                     ExpressionTypeTests,
-                    ParseTest
+                    ParseTest,
+                    EffectTests
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:

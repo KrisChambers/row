@@ -1,0 +1,5 @@
+name = "Simple effect"
+phase = "eval"
+expect = "success"
+expected_type = "Forall (fromList [\"v5\"]) (Arrow (Var \"v5\") EmptyRow (TCon \"Int\" []))"
+expected_value = "42"

@@ -1,4 +1,7 @@
-let const = \v -> \a -> v;
-let fortyTwo = const 42;
-let tru = const true;
+let const = \v -> \a -> v
+
+let fortyTwo = const 42
+
+let tru = const true
+
 let main = if tru true then fortyTwo 3 else 3

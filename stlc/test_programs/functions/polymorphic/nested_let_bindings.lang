@@ -1,7 +1,11 @@
-let f = \x -> x;
-let g = \y -> f y;
-let h = \z -> g z;
-let thing = if h true then h 42 else h 24;
+let f = \x -> x
+
+let g = \y -> f y
+
+let h = \z -> g z
+
+let thing = if h true then h 42 else h 24
+
 let main = f thing
 
 

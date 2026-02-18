@@ -1,5 +1,6 @@
 module ParseTest (parseTests) where
 
+import Data.Map qualified as Map
 import Parser qualified as P
 import Test.Tasty
 import Test.Tasty.HUnit
@@ -13,7 +14,8 @@ parseTests =
       typeTests,
       effectDeclarationTests,
       letDeclarationTests,
-      dataDeclarationTests
+      dataDeclarationTests,
+      handlerTests
     ]
 
 test :: (Eq a, Show a) => P.Parser a -> String -> a -> Assertion
@@ -22,6 +24,11 @@ test parser input expected = do
     Left err -> assertFailure $ show err
     Right e -> do
       e @?= expected
+
+-- NOTE(kc): Right now being wrapped in () signals that it needs to be parsed as an application
+--           This is wrong. I think we need to look at how we did the typeAtom stuff
+--
+--           e := (e) | e e | \x -> e | perform Ident.ident (e)+ | handler e with { ... }
 
 recordTests :: TestTree
 recordTests =
@@ -152,3 +159,43 @@ dataDeclarationTests =
     ]
   where
     testInput = test P.data_declaration
+
+handlerTests :: TestTree
+handlerTests =
+  testGroup
+    "Parsing Handlers"
+    [ testCase "Minimal handler with return clause only" $ do
+        testInput
+          "handle 42 with { return x -> x }"
+          $ P.Handle
+            (P.Lit $ P.LitInt 42)
+            (P.Handler ("x", P.Var "x") Map.empty),
+      testCase "Handler with single op clause" $ do
+        testInput
+          "handle (perform X.op ()) with { X.op a k -> k 10, return x -> x }"
+          $ P.Handle
+            (P.Perform "X" "op" (P.Lit P.LitUnit))
+            ( P.Handler
+                ("x", P.Var "x")
+                ( Map.fromList
+                    [ ( ("X", "op"),
+                        P.OpClause ["a"] "k" (P.App (P.Var "k") (P.Lit $ P.LitInt 10))
+                      )
+                    ]
+                )
+            ),
+      testCase "Handler with let expression in computation" $ do
+        testInput
+          "handle (let v = perform E.op () in v) with { return x -> x }"
+          $ P.Handle
+            (P.Let "v" (P.Perform "E" "op" (P.Lit P.LitUnit)) (P.Var "v"))
+            (P.Handler ("x", P.Var "x") Map.empty),
+      testCase "Return clause with non-trivial body" $ do
+        testInput
+          "handle 1 with { return x -> x + 1 }"
+          $ P.Handle
+            (P.Lit $ P.LitInt 1)
+            (P.Handler ("x", P.BinOp P.Add (P.Var "x") (P.Lit $ P.LitInt 1)) Map.empty)
+    ]
+  where
+    testInput = test P.handler

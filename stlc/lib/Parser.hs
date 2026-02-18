@@ -1,6 +1,7 @@
 {- HLINT ignore "Use camelCase" -}
 module Parser
   ( -- Ast
+    ParseError,
     TypeAnn,
     OpClause (..),
     Handler (..),
@@ -39,6 +40,7 @@ module Parser
     let_declaration,
     declarations,
     data_declaration,
+    handler,
   )
 where
 
@@ -48,6 +50,7 @@ import Debug.Trace qualified as Tr
 import Report (Report (..))
 import Text.Parsec
 import Text.Parsec.String (Parser)
+import Data.Map qualified as Map
 import Data.Map (Map)
 
 data TypeAnn = Int | Bool | Fn TypeAnn TypeAnn
@@ -130,22 +133,6 @@ data Decl
       Ord
     )
 
-
-{-
- - handle (expr) with {
- -    State.get k -> \s -> (k s) s,
- -    State.set k v -> (k ()) v,
- -    return x -> \s -> { value = x, state = s }
- - }
- -
- - handle (expr) with {
- -    Console.print k msg -> \log -> (k ()) (Cons msg log),
- -    Console.read k      -> \log -> (k 0) log,
- -    return x            -> \log -> { result = x, log = log }
- -
- - }
- -}
-
 data OpClause = OpClause [String] String Expr
   deriving (Show, Eq, Ord)
 
@@ -186,47 +173,97 @@ instance Report Expr where
       Perform a b c -> "perform " ++ a ++ "." ++ b ++ " " ++ prettyPrint c
       Handle e handler -> "handle " ++ prettyPrint e ++ " with " ++ "TODO: HANDLER"
 
--- handles :: Parser [Handler]
--- handles = do
---   let effHandle = do
---         _ <- char '|'
---         eff <- opt_space >> upperIdent
---         _ <- opt_space >> char '.'
---         op_name <- opt_space >> lowerIdent
---         arg1 <- opt_space >> lowerIdent
---         arg2 <- opt_space >> lowerIdent
---         _ <- opt_space >> arrow
---
---         expr <- opt_space >> parse_expr
---
---         return $ EffectHandle eff op_name arg1 arg2 expr
---
---   let returnHandle = do
---         _ <- char '|' >> opt_space >> keyword "return"
---         v <- opt_space >> lowerIdent
---         _ <- opt_space >> arrow
---         e <- opt_space >> parse_expr
---
---         return $ ReturnHandle v e
---
---   eHandles <- opt_space >> many (notFollowedBy (opt_space >> char '|' >> opt_space >> keyword "return") >> try (opt_space >> effHandle))
---   rHandle <- opt_space >> returnHandle
---
---   return $ rHandle:eHandles
---
--- handler :: Parser Expr
--- handler = do
---   _ <- keyword "handle"
---   eff <- opt_space >> parse_expr
---   _ <- opt_space >> keyword "with"
---   h <- opt_space >> handles
---
---   return $ Handle eff h
+{-
+ -
+data Handler = Handler
+  { retClause :: (String, Expr)
+  , opClause :: Map (String, String) OpClause
+  }
+  deriving (Show, Eq, Ord)
+
+data OpClause = OpClause [String] String Expr
+  deriving (Show, Eq, Ord)
+-}
+
+handler_body :: Parser Handler
+handler_body = do
+  let returnCls = do
+        _ <- keyword "return"
+        arg <- opt_space >> lowerIdent
+        _ <- opt_space >> arrow
+        expr <- opt_space >> parse_expr
+
+        return (arg, expr)
+
+  let opCls = do
+        eName <- upperIdent
+        _ <- char '.'
+        opName <- lowerIdent
+        let continuation = opt_space >> string "k"
+        arg <- many (try (notFollowedBy continuation >> opt_space >> lowerIdent))
+        k <- continuation
+        _ <- opt_space >> arrow
+        expr <- opt_space >> parse_expr
+
+        return $ (eName, opName, OpClause arg k expr)
+
+  let clause = do
+        rtrn <- try $ optionMaybe returnCls
+        op <- try $ optionMaybe opCls
+
+        return $ case rtrn of
+          Just r -> Left r
+          Nothing -> case op of
+              Just o -> Right o
+              Nothing -> error "Clause parsing error"
+
+  let opClses = do
+        clauses <- try (opt_space >> clause) `sepBy` try (opt_space >> char ',')
+
+        let agger cls (rt, clauseMap) = case cls of
+              Left (s, e) -> (Just (s, e), clauseMap)
+              Right (eff, op, opclause) -> (rt, Map.insert (eff, op) opclause clauseMap)
+
+
+        return $ foldr agger (Nothing, Map.empty) clauses
+
+  (maybeRt, clauseMap) <- opClses
+
+  let rt = case maybeRt of
+        Nothing -> error "Return statment is required"
+        Just r -> r
+
+
+  return $ Handler rt clauseMap
+
+
+handler :: Parser Expr
+handler = do
+  _ <- keyword "handle"
+  comp <- opt_space >> (parens parse_expr <|> parse_expr)
+  _ <- opt_space >> keyword "with"
+  hdlr <- opt_space >> braces handler_body
+
+  return $ Handle comp hdlr
+
+perform :: Parser Expr
+perform = do
+  let parse_perform = do
+        _ <- keyword "perform"
+        eff <- opt_space >> upperIdent
+        _ <- char '.'
+        opName <- lowerIdent
+        expr <- opt_space >> parse_expr
+
+        return $ Perform eff opName expr
+
+  parse_perform
+
 
 upperIdent :: Parser String
 upperIdent = do
   start <- upper
-  rest <- try identifier <|> return ""
+  rest <- try (identifier <|> return "")
   return $ start : rest
 
 lowerIdent :: Parser String
@@ -291,7 +328,7 @@ typeAtom =
 typeApp :: Parser Type
 typeApp = do
   first <- typeAtom
-  rest <- many (try (notFollowedBy (symbol arrow) *> opt_space *> typeAtom))
+  rest <- many (try (notFollowedBy (opt_space >> arrow) *> opt_space *> typeAtom))
   return $ foldl applyType first rest
   where
     applyType (TCon n args) arg = TCon n (args ++ [arg])
@@ -352,18 +389,17 @@ data_declaration = do
   return $ DataDecl name cstrs
 
 declaration :: Parser Decl
-declaration =
-  do
-    try effect_declaration
+declaration
+  = try effect_declaration
     <|> try let_declaration
 
 --   -- <|> try data_declaration
 
 declarations :: Parser [Decl]
-declarations = many declaration
+declarations = (many (declaration)) <* (opt_space >> eof)
 
-parse_all :: String -> Either ParseError Expr
-parse_all = parse parse_program ""
+parse_all :: String -> Either ParseError [Decl]
+parse_all = parse declarations ""
 
 parse_program :: Parser Expr
 parse_program = do
@@ -416,13 +452,14 @@ opt_space = void (many space)
 
 identifier :: Parser String
 identifier = do
-  prefix <- letter
-  remaining <- try (many1 alphaNum <|> string "_") <|> return ""
+  ident <- try (many1 alphaNum <|> string "_")
 
-  let ident = prefix : remaining
-  if ident `elem` ["let", "in", "if", "then", "else", "true", "false"]
+  if ident `elem` ["let", "in", "if", "then", "else", "true", "false", "with", "return", "perform", "handle"]
     then fail ("unexpected keyword: " ++ ident)
     else return ident
+
+literal_unit :: Parser Literal
+literal_unit = (char '(') >> opt_space >> char ')' $> LitUnit
 
 literal_bool :: Parser Literal
 literal_bool =
@@ -433,7 +470,7 @@ literal_int :: Parser Literal
 literal_int = fmap (\x -> LitInt (read x :: Integer)) (many1 digit)
 
 literal :: Parser Expr
-literal = try (fmap Lit (literal_bool <|> literal_int)) <|> variable
+literal = try (fmap Lit (literal_bool <|> literal_int <|> literal_unit)) <|> variable
 
 variable :: Parser Expr
 variable = fmap Var identifier
@@ -442,7 +479,8 @@ parse_expr :: Parser Expr
 parse_expr =
   try parse_let
     <|> try parse_record_creation
-    -- <|> try handler
+    <|> try handler
+    <|> try perform
     <|> try parse_if
     <|> try parse_lambda
     <|> try parse_binary_expr

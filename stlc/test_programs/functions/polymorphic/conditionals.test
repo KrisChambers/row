@@ -1,5 +1,5 @@
 name = "Polymorphic functions nested in conditionals"
 phase = "eval"
 expect = "success"
-expected_type = "TCon \"Int\" []"
+expected_type = "Forall (fromList []) (TCon \"Int\" [])"
 expected_value = "44"

@@ -2,6 +2,7 @@
 -- TODO (kc): Turning this off until we start implementing new Constraints
 module Type.Inference
   (
+    lookupType,
     Type (TCon, Var, Arrow, Record, EmptyRow, Row),
     Scheme (Forall),
     TypeError (..),
@@ -41,7 +42,7 @@ import Parser qualified as P
 import Report (Report (..))
 import Data.Bifunctor (bimap)
 import Debug.Trace qualified as Tr
-import Control.Monad (foldM, when)
+import Control.Monad (foldM)
 
 --- Basic Types
 -- t := Int
@@ -82,6 +83,9 @@ data TypeEnv = TypeEnv
   , envVars :: Map String Scheme
   , envCstors :: Map String CtorInfo
   }
+
+lookupType :: TypeEnv -> String -> Maybe Scheme
+lookupType env varName = Map.lookup varName $ envVars env
 
 extendVars :: TypeEnv -> String -> Scheme -> TypeEnv
 extendVars env name scheme = env { envVars = Map.insert name scheme (envVars env) }
@@ -240,6 +244,7 @@ instance Report Type where
             Var v -> v
             Row {} -> ","
             _ -> "ERROR"
+
 
 
 -- instance Report Scheme where
@@ -545,28 +550,133 @@ infer env = \case
           ]
 
     return (fresh_t, fresh_e, cArg ++ effect_c)
+   {-
+      Γ ⊢ e : A ! {Op} ∪ E
+      Γ, x:A ⊢ e_ret : C ! E
+      Γ, x_op:T_in, k_op:(T_out → C ! E) ⊢ e_op : C ! E
+      ─────────────────────────────────────────────
+      Γ ⊢ handle e with { return x→e_ret, Op(x_op,k_op)→e_op } : C ! E
+  -}
 
-  Expr.Handle _ _ -> do
-    -- This need to push the handlers onto a stack... stack of what?
-    throwError $ InferenceError "Handle : Not implemented"
+  Expr.Handle expr hdlr -> do
+    -- These will be the result types of the handle constructs
 
-{-
- - effect Console {
- -  print : String -> ()
- - }
- -
- - let foo = \ -> perform Console.print "Hello, World"
- -
- - let main = \ ->
- -    handle foo ()
- -      | Console.print k -> k ()
- -      | return x -> x
- -
- -
- -
- -
- -
- - -}
+    -- hdlrT is the type of the expr in "handle <expr> with ..."
+    -- The argument of the return needs to type check to this.
+    hdlrT <- fresh TVar >>= newvar
+
+    -- This is the rest of the effect rows. We want (| Op | hdlrRest |)
+    -- This should also be the resulting effect
+    hdlrRest <- fresh EVar >>= newvar
+
+    let opClauses = P.opClause hdlr -- Map (EffectName, OpName) -> EffectInfo <: The defined clauses in the handler expression
+    let retClause = P.retClause hdlr
+
+
+    let result = do
+          -- Need to get the effect name
+          e <- case Map.keys opClauses of
+                    [] -> Left "No opClauses to determine effect"
+                    ((n, a):_)  -> Right n
+          i <- maybeToEither ("Effect " ++ show e ++ " is not defined") $ envEffects env !? e
+
+          let params = effectInfoParams i -- These are type level params
+          let ops = effectInfoOps i
+
+          return (e, ops)
+
+    let (effectName, opsT) = case result of
+          Left err -> error err
+          Right v -> v
+
+    -- First we need to infer what the computation type is we are handling.
+    (et, ee, ec) <- infer env expr
+
+    -- The effect from the handled expr is equal to the effect name being handled + possible other stuff
+    let c1 = Equals (ee, Row (effectName, tUnit) hdlrRest)
+
+    opConstraints <-  mapM (\(op, scheme) -> (op, ) <$> getClauseConstraints env scheme (opClauses ! (effectName, op))) (Map.toList opsT) -- (op, constraints)
+    let (retVarName, retVarExpr) = retClause
+    (env', retVarT) <- extend env retVarName
+    (retT, retE, retC) <- infer env' retVarExpr
+
+    -- Maybe there is a better way to do this through constructing Arrow types and infering them?
+    -- The return statment variable has to match that of the computation we are performing.
+    let c0 = Equals (retVarT, et)
+    -- The type of the return body needs to match the general type of the handlers.
+    let c2 = Equals (hdlrT, retT)
+    let c3 = Equals (retE, hdlrRest)
+
+
+    let csts = foldr (++) [] $ map snd opConstraints
+    let csts' = c0:c3:c2:c1:ec ++ csts ++ retC
+
+    Tr.traceM $ "\n\n" ++  prettyPrintList csts' ++ "\n\n"
+
+    return (hdlrT, hdlrRest, csts')
+
+prettyPrintList :: Show a => [a] -> String
+prettyPrintList xs = foldr (\x agg -> agg ++ "\n\t," ++ show x) "[" xs
+
+getClauseConstraints :: TypeEnv -> Scheme -> P.OpClause -> Infer [Constraint]
+getClauseConstraints env opScheme (P.OpClause args k body) = do
+    expectedT <- instantiate opScheme
+    let opLambda = foldr (\a agg -> Expr.Lambda a Nothing agg) body $ reverse args
+    (env', kT) <- extend env k
+
+    (opt, ope, opc) <- infer env' opLambda
+
+    return $ Equals (opt, expectedT):opc
+
+
+onNothing :: String -> Maybe a -> a
+onNothing e = \case
+    Nothing -> error e
+    Just v -> v
+
+maybeToEither :: a ->  Maybe b -> Either a b
+maybeToEither dflt mayb
+  = case mayb of
+      Nothing -> Left dflt
+      Just v -> Right v
+
+    {-
+  Γ ⊢ e : A ! {Op} ∪ E
+  Γ, x:A ⊢ e_ret : C ! E
+  Γ, x:T_in, k:(T_out → C ! E) ⊢ e_op : C ! E
+  ─────────────────────────────────────────────
+  Γ ⊢ with e { return x→e_ret, Op(x,k)→e_op } : C ! E
+
+  output: C and E
+  input: e, ops...
+
+  fresh return_type -- The output of the handler needs to be consistent across op clauses.
+
+  infer e -> A ! <r1> (r is an effect row variable)
+      constraint r1 = <Op | r2>
+
+  infer return_body -> C ! a
+      constraint return_type = C
+      constraint a = r2
+
+  for each op clause
+    1. find it's definition's type : ex: get : () -> a
+    2. infer each arg x and constrain the type to be = the positional param type from the defintion?
+    3. infer the continuation type, constrain to be a function a -> return_type ! r2
+     -}
+
+
+
+    -- for each operation clause
+    --    the type of the args match that of the effect operation
+    --    the type of the continuation is a function k: OutputOfOperation -> output of handler?
+    --    The body must have the handler's result type C
+
+
+
+    -- Need to look at the OpClauses in b to get the effects
+    -- b is essentially a special arrow type except it is removing things..?
+    -- This should remove the effect that is being handled.
 
 
 
@@ -648,11 +758,12 @@ solve (c : cs) =
             | n `notElem` freeVars t ->
                 solve (t2 ->> t1 $ cs) >>= \s -> return $ s <> Single (t2, t1)
           (Arrow t11 e1 t12, Arrow t21 e2 t22) -> solve $ cs ++ [Equals (t11, t21), Equals (t12, t22), Equals (e1, e2)]
-          (Record (Var p), Record r) -> solve (Equals (Var p, r) : cs)
-          (Record r, Record (Var p)) -> solve (Equals (Var p, r) : cs)
-          (Record (Row (l, t) r), Record row) -> case toHead row l of
-            Row (_, t') r' -> solve $ cs ++ [Equals (t, t'), Equals (Record r, Record r')]
-            _ -> throwError $ InferenceError $ "Could not unify rows: " ++ show t1 ++ " and " ++ show t2
+          (Record a, Record b) -> solve (Equals (a, b):cs)
+          --(Record (Var p), Record r) -> solve (Equals (Var p, r) : cs)
+          --(Record r, Record (Var p)) -> solve (Equals (Var p, r) : cs)
+          (Row (l, t) r, row) -> case toHead row l of
+                Row (_, t') r' -> solve $ cs ++ [Equals (t, t'), Equals(r, r')]
+                _ -> throwError $ InferenceError $ "Could not unify rows: " ++ show t1 ++ " and " ++ show t2
           _ -> throwError $ InferenceError $ "Could not unify " ++ show t1 ++ " and " ++ show t2
 
 -- TODO (kc): Need some unit tests

@@ -1,6 +1,7 @@
-module Interpreter (eval, evalExpr, Env, EvaluationError, Value (RInt, RBool, RFunc)) where
+module Interpreter (eval, evalDecls, evalExpr, Env, EvaluationError, Value (RInt, RBool, RFunc)) where
 
 import Control.Monad (ap, when, (>=>))
+import Data.Char (toLower)
 import Data.Map (Map, (!), (!?))
 import Data.Map qualified as Map
 import Debug.Trace qualified as Tr
@@ -72,7 +73,23 @@ instance Monad Eval where
   Err s >>= f = Err s
 
 --- Mapping of variables to runtime values
-type Env = Map String Value
+data Env = Env
+  { envValues :: Map String Value
+  , envDecl :: Map String Expr
+  }
+
+emptyEnv :: Env
+emptyEnv = Env { envValues = Map.empty, envDecl = Map.empty }
+
+fromDecl :: [Decl] -> Env
+fromDecl ds =
+    let
+      _fromDecl ((LetDecl name t expr):xs) env = _fromDecl xs (Map.insert name expr env)
+      _fromDecl (_:xs) env = _fromDecl xs env
+      _fromDecl [] env = env
+    in
+      Env { envValues = Map.empty, envDecl = _fromDecl ds Map.empty }
+
 
 data EvaluationError
   = Error String
@@ -85,11 +102,83 @@ evalExpr expr = case s of
   Perform' {} -> Left $ Error "Missing handler?"
   Err err -> Left $ Error err
   where
-    s = eval Map.empty expr
+    s = eval emptyEnv expr
+
+evalDecls :: [Decl] -> Either EvaluationError Value
+evalDecls decls = case evalMain of
+      Done v -> Right v
+      Perform' {} -> Left $ Error "Missing handler?"
+      Err err -> Left $ Error err
+    where
+      evalMain = case findMain decls of
+            Nothing -> Err $ "Missing main function"
+            Just mainExpr -> eval initialEnv $ tryExecute mainExpr
+      initialEnv = fromDecl decls
+      findMain ((LetDecl name _ expr):xs) =
+          if map toLower name == "main"
+            then Just expr
+            else findMain xs
+      findMain (_:xs) = findMain xs
+      findMain [] = Nothing
+      tryExecute expr = case expr of
+            Lambda {} -> App expr $ Lit LitUnit
+            _ -> expr
+
+
+-- evalDecl :: Env -> Decl -> Either EvaluationError Value
+-- evalDecl env decl =
+  {- Our type environment has:
+   -  1. Type declarations
+   -  2. Effect Declarations
+   -  3. Let Declarations (expressions to be evaluated)
+   -
+   - We are only really concerned about the let declarations
+   - right now, Effects essentially have some names?
+   - So this needs to be kind of like Type inference,
+   - Env will need to have a map of name -> Value?
+   -
+   - Ex:
+   -
+   - let x = 2 => x := RInt 2  -- Constants
+   - let id = \x -> x =>  id := RFunc "x" (Var x) <env>
+   -
+   - Problem: How do we construct the environment here?
+   -
+   - let main = \_ -> thing 2 + luckyNumber
+   -
+   - let thing = \x -> luckyNum + x
+   - let luckyNumber = 42
+   -
+   - 1. The let decl -> (name, expr)
+   - 2. Create a dag where n1 < n2 iff n1 \in freeVars e2?`
+   - 3. This won't work for recursion (cycles).
+   -
+   - 1. Process main()
+   - 2. evaluate thing 2
+   -    - look up thing
+   -      - doesn't exist in values
+   -        - evaluate thing
+   -          - lookup luckyNumber
+   -            - doesn't exist in values
+   -              - decl <- getDecl "luckyNumber"
+   -              - evalDecl decl
+   -
+   -                - eval env luckyNumberDecl >-> env
+   -              - env["luckyNumber"] := RInt 42
+   -            - return $ env.lookup["luckyNumber"]
+   -          - Add
+
+   -
+   -
+   -}
+
+
 
 --- Evaluates an expression through term substitutions
 eval :: Env -> Expr -> Eval Value
-eval env (Var a) = return $ env ! a
+eval env (Var a) = case envValues env !? a of
+  Just v -> return v
+  Nothing -> eval env (envDecl env ! a)
 eval env (Lambda name _ body) = return $ RFunc name body env
 eval env (BinOp op left right) = do
   lvalue <- eval env left
@@ -112,7 +201,7 @@ eval _ (Lit l) = return $ case l of
   LitUnit -> RUnit
 eval env (Let name assign body) = do
   assign_value <- eval env assign
-  eval (Map.insert name assign_value env) body
+  eval (bind name assign_value env) body
 eval env (If cond l_expr r_expr) =
   eval env cond >>= \case
     RBool True -> eval env l_expr
@@ -126,14 +215,30 @@ eval env (App f arg) = do
   arg_v <- eval env arg
 
   let get_return_action = do
+        {-
+         - NOTE (kc):
+         -
+         - I am separating these since one is when the value is just from a lambda definition somewhere
+         - The other is the result of an effectual computation.
+         - Both are capturing the environment
+         -
+         - RFunc is explict (storing env in the constructor)
+         - REffClosure is constructed as a lambda \v -> intercept env hdlr (k v)
+         -
+         - These could be consolidated
+         - On Lambda name _ body -> REffClosure (\v -> eval (bind name v env) body)
+         - RFunc name body env -> REffClosure (\v -> eval (bind name v env') body)
+         -}
         case f_value of
           RFunc name body env' -> do
-            -- put env -- Set the evaluation environment
-            -- setValue name arg_v -- bind arg_v to the function name
-            eval (Map.insert name arg_v env') body
-          _ -> Err $ "Can not apply" ++ show f_value ++ " to " ++ show arg_v
+            eval (bind name arg_v env') body
+          REffClosure k -> do
+            k arg_v
+
+          _ -> Err $ "Can not apply " ++ show f_value ++ " to " ++ show arg_v
 
   get_return_action
+
 eval env (Record (RecordCstr ls)) = do
   let eval_map (l, e) = do
         expr <- eval env e
@@ -167,7 +272,7 @@ eval env (Handle expr hdlr) = do
 intercept :: Env -> Handler -> Eval Value -> Eval Value
 intercept env hdlr (Done v) =
   let (x, rBody) = retClause hdlr
-   in eval (Map.insert x v env) rBody
+   in eval (bind x v env) rBody
 intercept env hdlr (Perform' eff op params k) =
   case opClause hdlr !? (eff, op) of
     Nothing -> Perform' eff op params (\v -> intercept env hdlr (k v))
@@ -177,8 +282,8 @@ intercept env hdlr (Perform' eff op params k) =
        in eval env' body
 intercept _ _ err = err
 
-bind :: (Ord k) => k -> a -> Map k a -> Map k a
-bind = Map.insert
+bind :: String -> Value -> Env -> Env
+bind k v env = env { envValues = Map.insert k v (envValues env) }
 
-bindMany :: (Ord k) => [k] -> [a] -> Map k a -> Map k a
+bindMany :: [String] -> [Value] -> Env -> Env
 bindMany keys values m = foldr (\(k, v) acc -> bind k v acc) m (zip keys values)

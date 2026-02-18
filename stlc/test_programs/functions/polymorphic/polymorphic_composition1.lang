@@ -1,3 +1,5 @@
-let compose = \f -> \g -> \x -> f (g x);
-let inc = \n -> n + 1;
+let compose = \f -> \g -> \x -> f (g x)
+
+let inc = \n -> n + 1
+
 let main = compose inc inc 1

@@ -1,4 +1,7 @@
-let tru = \a -> \b -> a;
-let fls = \x -> \y -> y;
-let and = \s -> \t -> s t fls;
+let tru = \a -> \b -> a
+
+let fls = \x -> \y -> y
+
+let and = \s -> \t -> s t fls
+
 let main = and tru fls

@@ -11,6 +11,9 @@ import qualified Parser as P
 import qualified Type.Inference as TI
 import qualified Interpreter as I
 import TestSpec
+import Debug.Trace qualified as Tr
+import Control.Monad (when)
+import Report (prettyPrint)
 
 findAllFiles :: FilePath -> IO [FilePath]
 findAllFiles dir = do
@@ -64,38 +67,54 @@ checkParse spec source = case P.parse_all source of
 checkTypeCheck :: TestSpec -> String -> Assertion
 checkTypeCheck spec source = case P.parse_all source of
     Left err -> assertFailure $ "Parse failed: " ++ show err
-    Right expr -> case TI.inferType expr of
+    Right decl -> case TI.inferDecl decl of
         Left err ->
             if tsExpect spec == Failure
                 then checkErrorContains (tsErrorContains spec) (show err)
                 else assertFailure $ "Type error: " ++ show err
-        Right (typ, _effect) ->
+        Right env ->
             if tsExpect spec == Success
                 then case tsExpectedType spec of
                     Nothing -> pure ()
-                    Just expected -> assertEqual "Type mismatch" (T.unpack expected) (show typ)
+                    Just expected -> assertEqual "Type mismatch" (T.unpack expected) ("NOT IMPLEMENTED")
                 else assertFailure "Expected failure but type check succeeded"
 
-checkEval :: TestSpec -> String -> Assertion
-checkEval spec source = case P.parse_all source of
-    Left err -> assertFailure $ "Parse failed: " ++ show err
-    Right expr -> case TI.inferType expr of
-        Left err -> assertFailure $ "Type error: " ++ show err
-        Right (typ, _effect) -> case I.evalExpr expr of
-            Left err ->
-                if tsExpect spec == Failure
-                    then checkErrorContains (tsErrorContains spec) (show err)
-                    else assertFailure $ "Eval error: " ++ show err
-            Right value ->
-                if tsExpect spec == Success
-                    then do
-                        case tsExpectedValue spec of
+data Error = ParseError String | TypeError String | EvalError String
+  deriving(Show)
+
+
+fromError :: (Show a) => Either a b -> Either Error b
+fromError (Left err) = Left $ ParseError $ show err
+fromError (Right v) = Right v
+
+-- The one thing we can't do with this now is tsExpect spec == False
+checkEval :: TestSpec -> String -> Assertion -- (IO something?)
+checkEval spec source = case result of
+        Left err -> assertFailure $ show err
+        Right (_decls, _typeEnv, tMain, value) ->
+            if tsExpect spec == Success
+                then do
+                    case tsExpectedType spec of
                             Nothing -> pure ()
-                            Just expected -> assertEqual "Value mismatch" (T.unpack expected) (show value)
-                        case tsExpectedType spec of
-                                Nothing -> pure ()
-                                Just expected -> assertEqual ("Type mismatch \n\n" ++ show source ++ "\n\n" ++ show expr) (T.unpack expected) (show typ)
-                    else assertFailure "Expected failure but eval succeeded"
+                            Just expected -> do
+                                assertEqual ("Type mismatch \n\n" ++ show source) (T.unpack expected) (show tMain)
+                    case tsExpectedValue spec of
+                        Nothing -> pure ()
+                        Just expected -> assertEqual "Value mismatch" (T.unpack expected) (show value)
+                else assertFailure "Expected failure but eval succeeded"
+      where
+          result = do
+              decls <- fromError . P.parse_all $ source
+              typeEnv <- fromError . TI.inferDecl $ decls
+              _ <- when (tsName spec == T.pack "Simple effect") $ do
+                  Tr.traceM $ "\n\nDECLS" ++ (show $ decls) ++ "\n\n"
+                  Tr.traceM $ "\n\nEnvVars" ++ (show $ TI.envVars typeEnv) ++ "\n\n"
+              tMain <- case TI.lookupType typeEnv "main" of
+                          Nothing -> Left $ ParseError "Missing main function"
+                          Just t -> Right t
+              value <- fromError . I.evalDecls $ decls
+              return (decls, typeEnv, tMain, value)
+
 
 checkErrorContains :: Maybe T.Text -> String -> Assertion
 checkErrorContains Nothing _ = pure ()
