@@ -3,9 +3,9 @@ effect Error {
 }
 
 let main = \unused ->
-    handle 42 with {
-      Error.raise x k -> k () x
-      return x -> x
-    }
+    (handle 42 with {
+      Error.raise x k -> \s -> k () x,
+      return x -> \s -> x
+    }) 0
 
 
