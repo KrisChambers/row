@@ -172,7 +172,6 @@ addDeclToEnv env = \case
       (tExpr, eExpr, cExpr) <- infer new_env expr
 
       let result = evalState (runExceptT $ solve cExpr) IdSub
-      --Tr.traceM $ "\n\n=================== BOOP =================\n" ++ show result ++ "\n\n"
 
       eExprGen <- case result of
           Left err -> do
@@ -517,14 +516,13 @@ infer env = \case
     let expected_t = Record freshRow
 
     -- In more general systems this would generate a Lacks l p constraint
-    -- With microsofts proposal we have a simplified inference since we allow "scoped" labels
+    -- With microsofts results we have a simplified inference since we allow "scoped" labels
     return (result_t, ext_e, cl ++ cr ++ [Equals (expected_t, base_t), Equals (base_e, ext_e) ])
 
   -- "e3" = (| "Console" | e3 |)
   Expr.Perform effect op arg  -> do
     fresh_t <- fresh TVar >>= newvar
     fresh_e <- fresh EVar >>= newvar -- e3
-    --Tr.traceM $ "\n\n================= BLEEP ============= \n" ++ prettyPrint fresh_e ++ "\n\n"
     -- At this point we are just throwing an error if there is no effect info
     let effectInfo = envEffects env ! effect
     opType <- instantiate (effectInfoOps effectInfo ! op)
@@ -561,73 +559,58 @@ infer env = \case
   Expr.Handle expr hdlr -> do
     -- These will be the result types of the handle constructs
 
-    -- hdlrT is the type of the expr in "handle <expr> with ..."
-    -- The argument of the return needs to type check to this.
-    hdlrT <- fresh TVar >>= newvar
+    -- First we need to infer what the computation type is we are handling.
+    (bodyT, bodyE, bodyC) <- infer env expr
+
+    -- bodyT : Int
+
+    -- This is the resulting type of the handler
+    resultT <- fresh TVar >>= newvar
 
     -- This is the rest of the effect rows. We want (| Op | hdlrRest |)
     -- This should also be the resulting effect
     hdlrRest <- fresh EVar >>= newvar
 
-    let opClauses = P.opClause hdlr -- Map (EffectName, OpName) -> EffectInfo <: The defined clauses in the handler expression
-    let retClause = P.retClause hdlr
+    let (retVar, retExpr) = P.retClause hdlr
+    (env', retVarT) <- extend env retVar
+    (retT, retE, retC) <- infer env' retExpr
 
+    let return_constraints = (Equals (retVarT, bodyT)):retC -- type of x is Int
 
-    let result = do
-          -- Need to get the effect name
-          e <- case Map.keys opClauses of
-                    [] -> Left "No opClauses to determine effect"
-                    ((n, a):_)  -> Right n
-          i <- maybeToEither ("Effect " ++ show e ++ " is not defined") $ envEffects env !? e
+    opsC <- getOpConstraints env (Map.elems $ P.opClause hdlr)
 
-          let params = effectInfoParams i -- These are type level params
-          let ops = effectInfoOps i
+    let type_constraints = foldr (++) [] $ map (\(t,e,cs) -> cs ++ [Equals (t, resultT), Equals(e, hdlrRest)]) opsC
+    let effect_constraints = []
 
-          return (e, ops)
-
-    let (effectName, opsT) = case result of
-          Left err -> error err
-          Right v -> v
-
-    -- First we need to infer what the computation type is we are handling.
-    (et, ee, ec) <- infer env expr
-
-    -- The effect from the handled expr is equal to the effect name being handled + possible other stuff
-    let c1 = Equals (ee, Row (effectName, tUnit) hdlrRest)
-
-    opConstraints <-  mapM (\(op, scheme) -> (op, ) <$> getClauseConstraints env scheme (opClauses ! (effectName, op))) (Map.toList opsT) -- (op, constraints)
-    let (retVarName, retVarExpr) = retClause
-    (env', retVarT) <- extend env retVarName
-    (retT, retE, retC) <- infer env' retVarExpr
-
-    -- Maybe there is a better way to do this through constructing Arrow types and infering them?
-    -- The return statment variable has to match that of the computation we are performing.
-    let c0 = Equals (retVarT, et)
-    -- The type of the return body needs to match the general type of the handlers.
-    let c2 = Equals (hdlrT, retT)
-    let c3 = Equals (retE, hdlrRest)
-
-
-    let csts = foldr (++) [] $ map snd opConstraints
-    let csts' = c0:c3:c2:c1:ec ++ csts ++ retC
-
-    Tr.traceM $ "\n\n" ++  prettyPrintList csts' ++ "\n\n"
-
-    return (hdlrT, hdlrRest, csts')
+    return (resultT, hdlrRest, bodyC ++ return_constraints ++ type_constraints ++ effect_constraints ++ [Equals (retT, resultT), Equals (retE, hdlrRest)])
 
 prettyPrintList :: Show a => [a] -> String
 prettyPrintList xs = foldr (\x agg -> agg ++ "\n\t," ++ show x) "[" xs
 
-getClauseConstraints :: TypeEnv -> Scheme -> P.OpClause -> Infer [Constraint]
-getClauseConstraints env opScheme (P.OpClause args k body) = do
-    expectedT <- instantiate opScheme
-    let opLambda = foldr (\a agg -> Expr.Lambda a Nothing agg) body $ reverse args
-    (env', kT) <- extend env k
+getOpConstraints :: TypeEnv -> [P.OpClause] -> Infer [(Type, Type, [Constraint])]
+getOpConstraints env [] = return []
+getOpConstraints env (c:cs) = do
+    x <- getClauseConstraints env c
+    xs <- getOpConstraints env cs
 
-    (opt, ope, opc) <- infer env' opLambda
+    return $ x:xs
 
-    return $ Equals (opt, expectedT):opc
+getClauseConstraints :: TypeEnv -> P.OpClause -> Infer (Type, Type, [Constraint])
+getClauseConstraints env (P.OpClause args k body) = do
+    argT <- fresh TVar >>= newvar
+    resT <- fresh TVar >>= newvar
+    let kT = Arrow argT EmptyRow resT
 
+    let extendMany envv ps = case ps of
+          ((n, t): xs) -> extendMany (extendVars envv n (Forall Set.empty t)) xs
+          [] -> envv
+
+    argsT <- mapM (\s -> (s,) <$> (fresh TVar >>= newvar)) args
+
+
+    let env' = extendMany env (("k", kT):argsT)
+
+    infer env' body
 
 onNothing :: String -> Maybe a -> a
 onNothing e = \case

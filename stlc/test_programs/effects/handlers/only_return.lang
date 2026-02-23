@@ -1,0 +1,4 @@
+let main =
+  (handle 42 with {
+    return x -> \s -> x
+  }) 0

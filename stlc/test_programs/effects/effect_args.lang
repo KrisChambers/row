@@ -1,0 +1,15 @@
+effect State a {
+  get : () -> a
+}
+
+let inc = \unused ->
+  let value = perform State.get()
+  in perform State.set (value + 1)
+
+let main = \unused ->
+    handle inc() with {
+      State.get k -> k v,
+      State.set a k -> (k a) a
+    }
+
+

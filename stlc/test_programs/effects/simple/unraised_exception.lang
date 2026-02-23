@@ -1,0 +1,11 @@
+effect Error {
+  raise : Int -> ()
+}
+
+let main = \unused ->
+    handle 42 with {
+      Error.raise x k -> k () x
+      return x -> x
+    }
+
+
