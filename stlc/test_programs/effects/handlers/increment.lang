@@ -1,0 +1,26 @@
+effect Counter {
+  put : Int -> (),
+  get : () -> Int
+}
+
+let inc = \unused ->
+  let v = perform Counter.get ()
+  in
+    perform Counter.put (v + 1)
+
+
+let main =
+  let
+    test = \unused ->
+        let s1 = inc () in
+        let s2 = inc () in
+        let s3 = inc () in
+        let s4 = inc () in
+        let s5 = inc () in
+        let s6 = inc ()
+        in perform Counter.get ()
+  in (handle (test ()) with {
+      return x -> \s -> x,
+      Counter.get k -> \s -> (k s) s,
+      Counter.put v k -> \s -> (k ()) v
+    }) 0

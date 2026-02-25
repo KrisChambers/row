@@ -1,0 +1,31 @@
+effect Counter {
+  put : Int -> (),
+  get : () -> Int
+}
+
+let inc = \unused ->
+  let v = perform Counter.get () in
+  let s = perform Counter.put (v + 1)
+  in
+    perform Counter.get ()
+
+
+let add5 = \unused ->
+    let s1 = inc () in
+    let s2 = inc () in
+    let s3 = inc () in
+    let s4 = inc () in
+    inc ()
+
+let add5To = \init ->
+    (handle (add5 ()) with {
+      return x -> \s -> x,
+      Counter.get k -> \s -> (k s) s,
+      Counter.put v k -> \s -> (k ()) v
+    }) init
+
+let main =
+  let v1 = add5To 5 in
+  let v2 = add5To 2 in
+  v1 + v2
+

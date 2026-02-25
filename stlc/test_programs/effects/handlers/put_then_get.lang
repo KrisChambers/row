@@ -1,0 +1,17 @@
+effect Counter {
+  put : Int -> (),
+  get : () -> Int
+}
+
+let main =
+  let
+    test = \unused ->
+        let
+          s = perform Counter.put 5
+        in
+          perform Counter.get ()
+  in (handle (test ()) with {
+      return x -> \s -> x,
+      Counter.get k -> \s -> (k s) s,
+      Counter.put v k -> \s -> (k ()) v
+    }) 0

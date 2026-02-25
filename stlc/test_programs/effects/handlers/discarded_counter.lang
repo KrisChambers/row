@@ -1,0 +1,16 @@
+effect Counter {
+  put : Int -> (),
+  get : () -> Int
+}
+
+let foo = \blah ->
+    let s = perform Counter.put 5 in
+    42
+
+let main =
+    let handleState = handle (foo ()) with {
+        return x -> \s -> x,
+        Counter.get k -> \s -> (k s) s,
+        Counter.put v k -> \s -> (k ()) v
+    }
+    in handleState 0

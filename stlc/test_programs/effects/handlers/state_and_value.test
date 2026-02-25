@@ -1,0 +1,5 @@
+name = "Return both the state and value"
+phase = "eval"
+expect = "success"
+expected_type = "Forall (fromList []) (Record (Row (\"state\",Var \"v12\") (Row (\"value\",Var \"v11\") EmptyRow)))"
+expected_value = "{ value: 10, state: 10 }"

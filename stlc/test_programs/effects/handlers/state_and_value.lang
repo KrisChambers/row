@@ -1,0 +1,15 @@
+effect Counter {
+  put : Int -> (),
+  get : () -> Int
+}
+
+let test = \blah ->
+  let s = perform Counter.put 10 in
+   perform Counter.get ()
+
+let main = (handle test() with {
+    return x -> \s -> { value = x, state = s },
+    Counter.get k -> \s -> k s s,
+    Counter.put v k -> \s -> (k ()) v
+}) 0
+
