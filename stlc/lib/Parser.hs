@@ -210,7 +210,6 @@ handler_body = do
   let clause = do
         rtrn <- try $ optionMaybe returnCls
         op <- try $ optionMaybe opCls
-
         return $ case rtrn of
           Just r -> Left r
           Nothing -> case op of
@@ -243,7 +242,6 @@ handler = do
   comp <- opt_space >> (parens parse_expr <|> parse_expr)
   _ <- opt_space >> keyword "with"
   hdlr <- opt_space >> braces handler_body
-
   return $ Handle comp hdlr
 
 perform :: Parser Expr
@@ -253,7 +251,9 @@ perform = do
         eff <- opt_space >> upperIdent
         _ <- char '.'
         opName <- lowerIdent
-        expr <- opt_space >> parse_expr
+        -- NOTE : This is a bit hacky. An expression should be defined
+        --        as e := ( e ) | e e | \x -> e | ... etc
+        expr <- try(opt_space >> parse_expr) <|> try(opt_space >> parens parse_expr)
 
         return $ Perform eff opName expr
 

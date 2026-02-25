@@ -1,0 +1,11 @@
+effect Counter {
+  set : Int -> (),
+  get : () -> Int
+}
+
+let main =
+  (handle (perform Counter.get()) with {
+    Counter.get k -> \s -> (k s) s,
+    Counter.set v k -> \s -> (k ()) s,
+    return x -> \s -> x
+  }) 5

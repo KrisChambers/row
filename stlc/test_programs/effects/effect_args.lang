@@ -1,15 +1,19 @@
-effect State a {
-  get : () -> a
+effect MyState a {
+  get : () -> a,
+  set : a -> ()
 }
 
 let inc = \unused ->
-  let value = perform State.get()
-  in perform State.set (value + 1)
+  let value = perform MyState.get () in
+  let whatever = perform MyState.set (value + 1)
+  in
+    perform MyState.get ()
 
 let main = \unused ->
-    handle inc() with {
-      State.get k -> k v,
-      State.set a k -> (k a) a
-    }
+    (handle inc() with {
+      return x -> \s -> x,
+      MyState.get k -> \s -> (k s) s,
+      MyState.set a k -> \s -> (k ()) a
+    }) 0
 
 

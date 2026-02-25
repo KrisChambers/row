@@ -256,12 +256,12 @@ binaryOpTests :: TestTree
 binaryOpTests =
   testGroup
     "Binary Operations"
-    [ testCase "1 + 2: type=Int, constraints=[(Int,Int),(Int,Int)]" $ do
+    [ testCase "1 + 2: type=Int, constraints=[(Int,Int),(Int,Int), .. effects]" $ do
         let expr = BinOp Add (Lit (LitInt 1)) (Lit (LitInt 2))
         case doInfer T.prelude expr of
           Right (t, e, cs) -> do
             t @?= tInt
-            cs @?= [Equals (tInt, tInt), Equals (tInt, tInt)]
+            cs @?= [Equals (tInt, tInt), Equals (tInt, tInt), Equals (T.Var "e1", T.Var "e3"), Equals (T.Var "e2", T.Var "e3")]
           Left err -> assertFailure $ show err,
       testCase "x + y (x,y:Var): constrains both to Int" $ do
         let env = prelude {envVars = Map.union (envVars prelude) $ Map.fromList [("x", Forall Set.empty $ T.Var "vx"), ("y", Forall Set.empty $ T.Var "vy")]}
@@ -279,14 +279,14 @@ binaryOpTests =
         case doInfer T.prelude expr of
           Right (t, e, cs) -> do
             t @?= tInt
-            cs @?= [Equals (tInt, tInt), Equals (tInt, tInt)]
+            cs @?= [Equals (tInt, tInt), Equals (tInt, tInt), Equals (T.Var "e1", T.Var "e3"), Equals (T.Var "e2", T.Var "e3")]
           Left err -> assertFailure $ show err,
       testCase "true && false: type=Bool, constraints=[(Bool,Bool),(Bool,Bool)]" $ do
         let expr = BinOp And (Lit (LitBool True)) (Lit (LitBool False))
         case doInfer T.prelude expr of
           Right (t, e, cs) -> do
             t @?= tBool
-            cs @?= [Equals (tBool, tBool), Equals (tBool, tBool)]
+            cs @?= [Equals (tBool, tBool), Equals (tBool, tBool), Equals (T.Var "e1", T.Var "e3"), Equals (T.Var "e2", T.Var "e3")]
           Left err -> assertFailure $ show err,
       testCase "x && y (x,y:Var): constrains both to Bool" $ do
         let env = prelude {envVars = Map.union (envVars prelude) $ Map.fromList [("x", Forall Set.empty $ T.Var "vx"), ("y", Forall Set.empty $ T.Var "vy")]}
@@ -659,7 +659,7 @@ effectStubTests =
       testCase "Binary operations have EmptyRow effect" $ do
         let expr = BinOp Add (Lit (LitInt 1)) (Lit (LitInt 2))
         case doInfer T.prelude expr of
-          Right (_t, e, _cs) -> e @?= EmptyRow
+          Right (_t, e, _cs) -> e @?= T.Var "e3"
           Left err -> assertFailure $ show err,
       testCase "Conditionals have EmptyRow effect" $ do
         let expr = If (Lit (LitBool True)) (Lit (LitInt 1)) (Lit (LitInt 2))
@@ -717,10 +717,8 @@ effectDeclTests =
               Nothing -> assertFailure "State effect not found"
           Left err -> assertFailure $ show err,
       testCase "Lambda with Perform has effect variable in arrow type" $ do
-        -- TODO (kc): We need to create some fixtures.
         let consoleEffect = P.EffectDecl "Console" [] [("print", P.TFun (P.TCon "String" []) (P.TCon "()" []) P.EEmptyRow)]
         env <- either (assertFailure . show) return $ inferDecl [consoleEffect]
-        -- Using prelude's Console effect: \x -> perform Console.print x
         let expr = Lambda "x" Nothing (P.Perform "Console" "print" (P.Var "x"))
         case doInfer env expr of
           Right (t, _e, _cs) -> do
@@ -729,6 +727,7 @@ effectDeclTests =
                 -- Effect should be a variable that will unify to Console
                 case effect of
                   T.Var name -> assertBool "Effect var starts with e" ("e" `isPrefixOf` name)
+                  T.Row (name, rt) rtail -> assertBool "Should be an open Console effect" (name == "Console" && rtail /= EmptyRow)
                   _ -> assertFailure $ "Expected effect variable in arrow, got: " ++ show effect
               _ -> assertFailure $ "Expected Arrow, got: " ++ show t
           Left err -> assertFailure $ show err,

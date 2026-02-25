@@ -463,14 +463,44 @@ infer env = \case
     -- TODO (kc): Should there be restrictions on the bodies / conditons?
     return (tr_t, EmptyRow, cond_cs ++ tr_cs ++ fl_cs ++ [Equals (tBool, cond_t), Equals (tr_t, fl_t)])
   Expr.BinOp op l r -> do
-    (l_t, _, _l_cs) <- infer env l
-    (r_t, _, _r_cs) <- infer env r
+    (l_t, l_e, _l_cs) <- infer env l
+    (r_t, r_e, _r_cs) <- infer env r
+
+    --result_t <- fresh TVar >>= newvar
+
+    -- let binName = "a"
+    -- let binT = Var binName
+
+    -- This is the type of a binary operator a -> a [op] a
+    -- let binOpScheme = Forall (Set.fromList [binName]) $ Arrow binT EmptyRow (Arrow binT EmptyRow binT)
+    -- let expected = Arrow l_t l_e (Arrow r_t r_e result_t)
+
+    -- let intF = Arrow tInt l_e (Arrow tInt r_e tInt)
+    -- let boolF = Arrow tBool l_e (Arrow tBool r_e tBool)
+
+    -- binOpT <- instantiate binOpScheme
+
+    -- let base_constraints = case op of
+    --       P.Add -> [Equals (binOpT, intF)]
+    --       P.Subtract -> [Equals (binOpT, intF)]
+    --       P.And -> [Equals (binOpT, boolF)]
+    --       P.Or -> [Equals (binOpT, boolF)]
+
+
+    --let c = (Equals (binOpT, expected)):(Equals (l_e, r_e)):base_constraints
+    -- l_t -[l_e]-> r_t -[r_e]-> result_t ~ v1 -[e1]-> v1 -[e2]-> v1
+
+
+    result_e <- fresh EVar >>= newvar
 
     -- we are assuming here that our built in binary operations are more or less total and can be used in any
     -- effect context
 
-    let int_cs = (tInt, EmptyRow, [Equals (l_t, tInt), Equals (r_t, tInt)])
-    let bool_cs = (tBool, EmptyRow, [Equals (l_t, tBool), Equals (r_t, tBool)])
+    let eCst = [ Equals (l_e, result_e), Equals (r_e, result_e)]
+
+    let int_cs = (tInt, result_e, [Equals (l_t, tInt), Equals (r_t, tInt)] ++ eCst)
+    let bool_cs = (tBool, result_e, [Equals (l_t, tBool), Equals (r_t, tBool)] ++ eCst)
+    --return (binT, l_e, c)
 
     return $ case op of
       P.Add -> int_cs
@@ -519,7 +549,6 @@ infer env = \case
     -- With microsofts results we have a simplified inference since we allow "scoped" labels
     return (result_t, ext_e, cl ++ cr ++ [Equals (expected_t, base_t), Equals (base_e, ext_e) ])
 
-  -- "e3" = (| "Console" | e3 |)
   Expr.Perform effect op arg  -> do
     fresh_t <- fresh TVar >>= newvar
     fresh_e <- fresh EVar >>= newvar -- e3
@@ -530,7 +559,7 @@ infer env = \case
 
     (tArg, eArg, cArg) <- infer env arg
 
-    let t = Arrow tArg fresh_e fresh_t -- String - (| e3 |) -> ()
+    let t = Arrow tArg fresh_e fresh_t
 
     -- I think this needs to be something like
     -- (tArg, eArg, cArg) <- infer env arg
@@ -547,7 +576,7 @@ infer env = \case
             Equals (fresh_e, effect_t) -- This is the resulting effect
           ]
 
-    return (fresh_t, fresh_e, cArg ++ effect_c)
+    return (fresh_t, effect_t, cArg ++ effect_c)
    {-
       Γ ⊢ e : A ! {Op} ∪ E
       Γ, x:A ⊢ e_ret : C ! E
@@ -561,6 +590,10 @@ infer env = \case
 
     -- First we need to infer what the computation type is we are handling.
     (bodyT, bodyE, bodyC) <- infer env expr
+
+    -- Tr.traceM $ "\n\n" ++ show bodyE ++ "\n" ++ show bodyC
+
+    -- _ <- error $ show bodyE
 
     -- bodyT : Int
 
@@ -577,6 +610,16 @@ infer env = \case
 
     let return_constraints = (Equals (retVarT, bodyT)):retC -- type of x is Int
 
+    --let aaa = envEffects env
+    --let info = aaa ! "MyState"
+    --let ops = effectInfoOps info
+    --let getS = ops ! "get"
+
+    ---- Need to generate constraints for the arguments and return type based on the schema for handler operations
+    ---- Ex: get : () -> a  Needs to be instantiated with a type variable va
+
+
+
     opsC <- getOpConstraints env (Map.elems $ P.opClause hdlr)
 
     let type_constraints = foldr (++) [] $ map (\(t,e,cs) -> cs ++ [Equals (t, resultT), Equals(e, hdlrRest)]) opsC
@@ -588,7 +631,7 @@ prettyPrintList :: Show a => [a] -> String
 prettyPrintList xs = foldr (\x agg -> agg ++ "\n\t," ++ show x) "[" xs
 
 getOpConstraints :: TypeEnv -> [P.OpClause] -> Infer [(Type, Type, [Constraint])]
-getOpConstraints env [] = return []
+getOpConstraints _ [] = return []
 getOpConstraints env (c:cs) = do
     x <- getClauseConstraints env c
     xs <- getOpConstraints env cs
@@ -599,7 +642,8 @@ getClauseConstraints :: TypeEnv -> P.OpClause -> Infer (Type, Type, [Constraint]
 getClauseConstraints env (P.OpClause args k body) = do
     argT <- fresh TVar >>= newvar
     resT <- fresh TVar >>= newvar
-    let kT = Arrow argT EmptyRow resT
+    effect <- fresh EVar >>= newvar
+    let kT = Arrow argT effect resT
 
     let extendMany envv ps = case ps of
           ((n, t): xs) -> extendMany (extendVars envv n (Forall Set.empty t)) xs
@@ -608,7 +652,7 @@ getClauseConstraints env (P.OpClause args k body) = do
     argsT <- mapM (\s -> (s,) <$> (fresh TVar >>= newvar)) args
 
 
-    let env' = extendMany env (("k", kT):argsT)
+    let env' = extendMany env ((k, kT):argsT)
 
     infer env' body
 
