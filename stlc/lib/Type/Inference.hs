@@ -43,6 +43,7 @@ import Report (Report (..))
 import Data.Bifunctor (bimap)
 import Debug.Trace qualified as Tr
 import Control.Monad (foldM)
+import Control.Monad (when)
 
 --- Basic Types
 -- t := Int
@@ -63,11 +64,13 @@ data TypeInfo = TypeInfo
     -- *, or * -> *, ?
   , typeInfoKind :: String
   }
+  deriving (Show)
 
 data EffectInfo = EffectInfo
   { effectInfoParams :: [String]
   , effectInfoOps :: Map String Scheme
   }
+  deriving (Show)
 
 -- Contains constructor information.
 -- The name of the type the constructor belongs
@@ -76,6 +79,7 @@ data CtorInfo = CtorInfo
   { ctorInfoTypeName :: String
   , ctorInfoScheme :: Scheme
   }
+  deriving (Show)
 
 data TypeEnv = TypeEnv
   { envTypes :: Map String TypeInfo
@@ -83,6 +87,15 @@ data TypeEnv = TypeEnv
   , envVars :: Map String Scheme
   , envCstors :: Map String CtorInfo
   }
+
+instance Show TypeEnv where
+  show t = "\n{" ++ (foldr (\a b -> b ++ "\n" ++ a) "" components) ++ "\n}"
+    where
+      components = [showTypes, showEffects, showVars, showCstrs]
+      showTypes = foldr (\(name, info) b -> b ++ "\n\t" ++ name ++ " : " ++ show info) "\t" (Map.toList $ envTypes t)
+      showEffects = foldr (\(name, info) b -> b ++ "\n\t" ++ name ++" : " ++ show info) "\t" (Map.toList $ envEffects t)
+      showVars = foldr (\(name, info) b -> b ++ "\n\t" ++ name ++ " : " ++show info) "\t" (Map.toList $ envVars t)
+      showCstrs = foldr (\(name, info) b -> b ++ "\n\t" ++ name ++ " : " ++show info) "\t" (Map.toList $ envCstors t)
 
 lookupType :: TypeEnv -> String -> Maybe Scheme
 lookupType env varName = Map.lookup varName $ envVars env
@@ -170,12 +183,17 @@ addDeclToEnv env = \case
     P.LetDecl name t expr -> do
       (new_env, a) <- extend env name
       (tExpr, eExpr, cExpr) <- infer new_env expr
+      -- when (name == "add5To") $ do
+      --     Tr.traceM $ "\n"
+      --     Tr.traceM $ "\n\n" ++  show name ++ " : " ++ prettyPrint tExpr
+      --     Tr.traceM $ "\n" ++ prettyPrintList cExpr
+      --     Tr.traceM $ "\n" ++ show new_env
 
       let result = evalState (runExceptT $ solve cExpr) IdSub
 
       eExprGen <- case result of
           Left err -> do
-            throwError err
+            throwError $ UnificationError $ "Error unifying " ++ name ++ "\n" ++ prettyPrint expr ++ " :: " ++ show err
           Right s -> return $ generalize $ apply s tExpr
 
       let env' = extendVars new_env name eExprGen
@@ -253,7 +271,11 @@ data TypeError
   = InferenceError String
   | InvalidType String
   | UnificationError String
-  deriving (Show)
+
+instance Show TypeError where
+  show (InferenceError s) = s
+  show (InvalidType s) = s
+  show (UnificationError s) = s
 
 {- Represents that two types should be equal -}
 -- type Constraint = (Type, Type)
@@ -556,7 +578,6 @@ infer env = \case
     let effectInfo = envEffects env ! effect
     opType <- instantiate (effectInfoOps effectInfo ! op)
 
-
     (tArg, eArg, cArg) <- infer env arg
 
     let t = Arrow tArg fresh_e fresh_t
@@ -655,11 +676,6 @@ getClauseConstraints env (P.OpClause args k body) = do
     let env' = extendMany env ((k, kT):argsT)
 
     infer env' body
-
-onNothing :: String -> Maybe a -> a
-onNothing e = \case
-    Nothing -> error e
-    Just v -> v
 
 maybeToEither :: a ->  Maybe b -> Either a b
 maybeToEither dflt mayb
@@ -790,8 +806,8 @@ solve (c : cs) =
           --(Record r, Record (Var p)) -> solve (Equals (Var p, r) : cs)
           (Row (l, t) r, row) -> case toHead row l of
                 Row (_, t') r' -> solve $ cs ++ [Equals (t, t'), Equals(r, r')]
-                _ -> throwError $ InferenceError $ "Could not unify rows: " ++ show t1 ++ " and " ++ show t2
-          _ -> throwError $ InferenceError $ "Could not unify " ++ show t1 ++ " and " ++ show t2
+                _ -> throwError $ InferenceError $ "Could not unify rows: " ++ prettyPrint t1 ++ " and " ++ prettyPrint t2
+          _ -> throwError $ InferenceError $ "Could not unify " ++ prettyPrint t1 ++ " and " ++ prettyPrint t2
 
 -- TODO (kc): Need some unit tests
 getFreshVarMap :: Set String -> Infer (Map String String)

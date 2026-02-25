@@ -42,7 +42,7 @@ instance Show Value where
   show = \case
     RFunc var expr _ -> "\\" ++ var ++ " -> (" ++ show expr ++ ")"
     RUnit -> "()"
-    RRecord [] -> "{ }"
+    RRecord [] -> "{}"
     RRecord lbls -> "{ " ++ foldr1 (\lbl acc -> lbl ++ ", " ++ acc) labels ++ " }"
       where
         labels = map (\(l, v) -> l ++ ": " ++ show v) lbls
@@ -178,7 +178,8 @@ evalDecls decls = case evalMain of
 eval :: Env -> Expr -> Eval Value
 eval env (Var a) = case envValues env !? a of
   Just v -> return v
-  Nothing -> eval env (envDecl env ! a)
+  Nothing -> do
+    eval env (envDecl env ! a)
 eval env (Lambda name _ body) = return $ RFunc name body env
 eval env (BinOp op left right) = do
   lvalue <- eval env left

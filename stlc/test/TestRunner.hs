@@ -106,9 +106,6 @@ checkEval spec source = case result of
           result = do
               decls <- fromError . P.parse_all $ source
               typeEnv <- fromError . TI.inferDecl $ decls
-              _ <- when (tsName spec == T.pack "Simple effect") $ do
-                   Tr.traceM $ "\n\nDECLS" ++ (show $ decls) ++ "\n\n"
-                   Tr.traceM $ "\nEnvVars" ++ (show $ TI.envVars typeEnv) ++ "\n\n"
               tMain <- case TI.lookupType typeEnv "main" of
                           Nothing -> Left $ ParseError "Missing main function"
                           Just t -> Right t
