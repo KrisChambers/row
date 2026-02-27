@@ -545,9 +545,9 @@ infer env = \case
     let constraints = foldl (\acc (_, (_, row_e, cst)) -> acc ++ cst ++ [Equals (record_e, row_e)]) [] c
     return (Record row, record_e, constraints)
   Expr.Record (RecordExpr.RecordAccess expr label) -> do
-    -- A |- e : { l :: T | r }
+    -- A |- e : { l : T | r }
     -- -----------------------
-    --      A |- e.l :: T
+    --      A |- e.l : T
 
     fresht <- fresh TVar >>= newvar
     (expr_t, record_e, c) <- infer env expr
@@ -557,9 +557,9 @@ infer env = \case
 
     return (fresht, record_e, c ++ [Equals (expected_t, expr_t)])
   Expr.Record (RecordExpr.RecordExtension base name ext) -> do
-    --        A |- e1 : {p}     A |- e2 :: T
+    --        A |- e1 : {p}     A |- e2 : T
     -- --------------------------------------------------
-    --      A |- { e1 with l = e2 } : { l :: T | p }
+    --      A |- { e1 with l = e2 } : { l : T | p }
     --
     --  Input : e1, e2, l
     --  Output : T, p

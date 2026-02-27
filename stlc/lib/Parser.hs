@@ -171,7 +171,20 @@ instance Report Expr where
       Let var assign body -> "let " ++ var ++ " = " ++ prettyPrint assign ++ " in " ++ prettyPrint body
       Record rexpr -> prettyPrint rexpr
       Perform a b c -> "perform " ++ a ++ "." ++ b ++ " " ++ prettyPrint c
-      Handle e handler -> "handle " ++ prettyPrint e ++ " with " ++ "TODO: HANDLER"
+      Handle e hdlr -> "handle " ++ prettyPrint e ++ " with " ++ prettyPrint hdlr
+
+instance Report Handler where
+  prettyPrint (Handler (retV, retE) ops)= "{\n\t" ++ ppOps ++ "\n\t" ++ "return " ++ retV ++ " -> " ++ prettyPrint retE
+    where
+      ppOps = foldr (\a b -> b ++ "\n\t" ++ a) "" $ Map.mapWithKey ppHandle ops
+      ppHandle (eff, name) a = eff ++ "." ++ name ++ " " ++ prettyPrint a
+
+instance Report OpClause where
+    prettyPrint (OpClause args continuation expr) = ppArg ++ continuation ++ " -> " ++ prettyPrint expr
+      where
+        ppArg = foldr (++) "" args
+
+
 
 {-
  -

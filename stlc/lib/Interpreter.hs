@@ -61,7 +61,7 @@ data Eval a
 instance Functor Eval where
   fmap f (Done a) = Done (f a)
   fmap f (Perform' ef op args k) = Perform' ef op args (fmap f . k)
-  fmap f (Err s) = Err s
+  fmap _ (Err s) = Err s
 
 instance Applicative Eval where
   pure = Done
@@ -70,7 +70,7 @@ instance Applicative Eval where
 instance Monad Eval where
   Done a >>= f = f a
   Perform' eff op args k >>= f = Perform' eff op args (k >=> f)
-  Err s >>= f = Err s
+  Err s >>= _ = Err s
 
 --- Mapping of variables to runtime values
 data Env = Env
