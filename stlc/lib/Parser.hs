@@ -46,7 +46,7 @@ where
 
 import Control.Monad (void)
 import Data.Functor (($>))
-import Debug.Trace qualified as Tr
+-- import Debug.Trace qualified as Tr
 import Report (Report (..))
 import Text.Parsec
 import Text.Parsec.String (Parser)
@@ -434,8 +434,8 @@ start_rec = void (char '{')
 end_rec :: Parser ()
 end_rec = void (char '}')
 
-access_rec :: Parser ()
-access_rec = void (char '.')
+-- access_rec :: Parser ()
+-- access_rec = void (char '.')
 
 newline_delimiter :: Parser ()
 newline_delimiter = newline >> opt_space >> newline >> return ()
