@@ -241,7 +241,11 @@ instance Eq Type where
       where
         typesEqual = foldr accumulator True $ zip ts1 ts2
         accumulator (t1, t2) a = a && t1 == t2
-  (==) _ _ = False
+  (==) (Var _) _ = False
+  (==) (Arrow {}) _ = False
+  (==) (Record _) _ = False
+  (==) EmptyRow _ = False
+  (==) (TCon {}) _ = False
 
 instance Report Type where
   prettyPrint t =
