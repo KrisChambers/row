@@ -14,6 +14,7 @@ constraintSolveTests =
     [ basicTests
     , recordTests
     , effectConstraintTests
+    , rowMergeTests
     ]
 
 doSolve :: [Constraint] -> Either TypeError Substitution
@@ -99,9 +100,86 @@ effectConstraintTests =
             assertBool "Should have effect substitution" (sub /= IdSub)
     ]
 
--- ============================================================================
--- Property Tests
--- ============================================================================
 
--- reflexiveRelation => [] Substitution Ex: (Int, Int) -> []
---
+rowMergeTests :: TestTree
+rowMergeTests =
+  testGroup
+    "Row Merging"
+    [
+    -- Merge EmptyRow rRight rFinal  =>  rFinal = rRight
+    testCase "Merge: empty left produces right side" $ do
+      let cs = [Merge EmptyRow (Row ("x", tInt) EmptyRow) (Var "r")]
+      case doSolve cs of
+        Left err -> assertFailure $ show err
+        Right sub -> apply sub (Var "r") @?= Row ("x", tInt) EmptyRow,
+
+    -- Merge rLeft EmptyRow rFinal  =>  rFinal = rLeft
+    testCase "Merge: empty right produces left side" $ do
+      let cs = [Merge (Row ("y", tBool) EmptyRow) EmptyRow (Var "r")]
+      case doSolve cs of
+        Left err -> assertFailure $ show err
+        Right sub -> apply sub (Var "r") @?= Row ("y", tBool) EmptyRow,
+
+    testCase "Merge: both empty produces EmptyRow" $ do
+      let cs = [Merge EmptyRow EmptyRow (Var "r")]
+      case doSolve cs of
+        Left err -> assertFailure $ show err
+        Right sub -> apply sub (Var "r") @?= EmptyRow,
+
+    -- Both closed: mergeRow concatenates left in front of right
+    testCase "Merge: two closed rows concatenate" $ do
+      let left  = Row ("x", tInt) EmptyRow
+      let right = Row ("y", tBool) EmptyRow
+      let cs = [Merge left right (Var "r")]
+      case doSolve cs of
+        Left err -> assertFailure $ show err
+        Right sub -> apply sub (Var "r") @?= Row ("x", tInt) (Row ("y", tBool) EmptyRow),
+
+    testCase "Merge: row variable of open left row becomes open variable for result" $ do
+      let left  = Row ("x", tInt) (Var "tail")  -- open row
+      let right = Row ("y", tBool) EmptyRow
+      let cs = [Merge left right (Var "r")]
+      case doSolve cs of
+        Left err -> assertFailure $ show err
+        Right sub -> apply sub (Var "r") @?= Row ("x", tInt) (Row ("y", tBool) (Var "tail")),
+
+    testCase "Merge: row variable of open right row becomes open variable for result" $ do
+      let left  = Row ("x", tInt) EmptyRow
+      let right = Row ("y", tBool) (Var "tail")  -- open row
+      let cs = [Merge left right (Var "r")]
+      case doSolve cs of
+        Left err -> assertFailure $ show err
+        Right sub -> apply sub (Var "r") @?= Row ("x", tInt) (Row ("y", tBool) (Var "tail")),
+
+    -- The Merge handler solves `cs` first, then applies the substitution to rLeft/rRight
+    testCase "Merge: defers to solve variables from other constraints first" $ do
+      let cs = [ Equals (Var "a", Row ("x", tInt) EmptyRow) , Merge (Var "a") (Row ("y", tBool) EmptyRow) (Var "r") ]
+      case doSolve cs of
+        Left err -> assertFailure $ show err
+        Right sub -> apply sub (Var "r") @?= Row ("x", tInt) (Row ("y", tBool) EmptyRow),
+
+    testCase "Merge: both sides are variables resolved to EmptyRow" $ do
+      let cs = [ Equals (Var "a", EmptyRow) , Equals (Var "b", EmptyRow) , Merge (Var "a") (Var "b") (Var "r") ]
+      case doSolve cs of
+        Left err -> assertFailure $ show err
+        Right sub -> apply sub (Var "r") @?= EmptyRow,
+
+
+    testCase "Merge: multi-field closed rows" $ do
+      let left  = Row ("x", tInt) (Row ("y", tBool) EmptyRow)
+      let right = Row ("z", tInt) EmptyRow
+      let cs = [Merge left right (Var "r")]
+      case doSolve cs of
+        Left err -> assertFailure $ show err
+        Right sub -> apply sub (Var "r")
+          @?= Row ("x", tInt) (Row ("y", tBool) (Row ("z", tInt) EmptyRow)),
+
+    -- This should produce an error
+    testCase "Merge: both open rows produces a UnificationError" $ do
+        let left  = Row ("x", tInt) (Var "t1")
+        let right = Row ("y", tBool) (Var "t2")
+        let cs = [Merge left right (Var "r")]
+        case doSolve cs of
+          Left err -> return ()
+          Right _ -> assertFailure "We are not handling the case where we have 2 open rows"
+  ]
