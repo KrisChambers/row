@@ -1,0 +1,10 @@
+partial : ({ r . s } -> a) -> r -> s -> a
+let partial = \func -> \paramR -> \rest ->
+  let myRec = { rest with paramR }
+  in func myRec
+
+let addStuff = \r -> r.x + r.y
+
+let add2ToY = \s -> partial addStuff { s with x = 2 }
+
+let main = add2ToY { x = 1, y = 0 }

@@ -32,6 +32,9 @@ add = BinOp Add
 perf :: String -> String -> Expr -> Expr
 perf = Perform
 
+eff :: String -> [String] -> [(String, Type)] -> Decl
+eff = EffectDecl
+
 -- | Build a Handle expression with a return clause and operation clauses.
 --
 --   @hdl body ("x", retBody) [(("Eff","op"), (["arg"], "k", opBody))]@
@@ -306,3 +309,12 @@ stateLikeTests =
                 (int 0)
         assertEval "state set then get" expr "10"
     ]
+
+-- polymorphicEffectInfo :: TestTree
+-- polymorphicEffectInfo =
+--   testGroup
+--   "Polymorphic Effect Info"
+--   [ testCase "Effect declarations" $ do
+--       let expr = eff "State" ["a"] [("set", TFun unit (TVar "a"))]
+--
+--   ]

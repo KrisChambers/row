@@ -26,7 +26,7 @@ module Type.Inference
     tUnit,
     tString,
     addDeclToEnv,
-    inferDecl
+    inferDecl,
   )
 where
 
@@ -45,12 +45,6 @@ import Debug.Trace qualified as Tr
 import Control.Monad (foldM)
 import Control.Monad (when)
 
---- Basic Types
--- t := Int
---    | Bool
---    | a
---    | t -> t ! e
---    | { l1 : t, ... ln: tn }
 
 data Type = Var String | Arrow Type Type Type | Record Type | EmptyRow | Row (String, Type) Type | TCon String [Type]
   deriving (Show, Ord)
@@ -71,6 +65,27 @@ data EffectInfo = EffectInfo
   , effectInfoOps :: Map String Scheme
   }
   deriving (Show)
+
+{-
+ effect State a {
+   get : () -> a
+   put : a -> ()
+ }
+
+ turns into:
+
+ "State" -> {
+   "param" = ["a"],
+   "ops" = {
+     "get" = forall a. () -> a
+     "set" = forall a. a -> ()
+   }
+  }
+
+
+
+
+-}
 
 -- Contains constructor information.
 -- The name of the type the constructor belongs
@@ -281,9 +296,10 @@ instance Show TypeError where
   show (InvalidType s) = s
   show (UnificationError s) = s
 
-{- Represents that two types should be equal -}
--- type Constraint = (Type, Type)
-data Constraint = Equals (Type, Type)
+{- Type Constraints -}
+data Constraint
+  = Equals (Type, Type)
+  | Merge Type Type Type
   deriving (Show, Eq)
 
 -- | A substitution.
@@ -390,6 +406,11 @@ infer env = \case
   -- NOTE (kc): This fails with an error if there is a scoping problem.
   --            This is a bug so it is fine
   Expr.Var name -> do
+    {-
+      Г, x : T |-
+     ───────────── [ VAR ]
+      Г |- x : T
+    -}
     assoc_t <- case envVars env !? name of
       Just t -> pure t
       Nothing -> throwError $ InferenceError $ "Type Environment does not contain a type for variable: " ++ name
@@ -398,12 +419,24 @@ infer env = \case
     t <- instantiate assoc_t
     e <- fresh EVar >>= newvar
     return (t, e, [])
+
   Expr.Lambda var_name _ expr -> do
+    {-
+      Г |- x : T1   Г |- e : T2
+     ────────────────────────── [ ABS ]
+        Г |- \x. e : T1 -> T2
+    -}
     (new_env, u) <- extend env var_name
     (t, e, cst) <- infer new_env expr
     e' <- fresh EVar >>= newvar
     return (Arrow u e t, e', cst)
+
   Expr.App e1 e2 -> do
+    {-
+      Г |- e1 : T1 -> T   Г |- e2 : T1
+     ────────────────────────────────── [ APP ]
+              Г |- e1 e2 : T
+    -}
     fresh_t <- fresh TVar >>= newvar
     fresh_e <- fresh EVar >>= newvar
 
@@ -422,6 +455,12 @@ infer env = \case
         P.LitString _ -> (tString, fresh_t, [])
         P.LitUnit -> (tUnit, fresh_t, [])
   Expr.Let var_name assign body -> do
+    {-
+      Г |- [x -> e1]e2 : T    Г |- e1 : T1
+     ─────────────────────────────────────── [ LETPOLY ]
+            Г |- let x = e1 in e2 : T
+    -}
+
     -- Generate a type var a for variable name
     (new_env, a) <- extend env var_name
     -- generate type and constraints for the assign expression
@@ -482,6 +521,11 @@ infer env = \case
 
     return (body_t, body_e, constraints)
   Expr.If cond tr fl -> do
+    {-
+     Г |- f : T   Г |- t : T   Г |- b : Bool
+    ──────────────────────────────────────────  [ IF ]
+            Г |- if b then t else f
+    -}
     (cond_t, cond_e, cond_cs) <- infer env cond
     (tr_t, tr_e, tr_cs) <- infer env tr
     (fl_t, fl_e, fl_cs) <- infer env fl
@@ -491,31 +535,6 @@ infer env = \case
   Expr.BinOp op l r -> do
     (l_t, l_e, _l_cs) <- infer env l
     (r_t, r_e, _r_cs) <- infer env r
-
-    --result_t <- fresh TVar >>= newvar
-
-    -- let binName = "a"
-    -- let binT = Var binName
-
-    -- This is the type of a binary operator a -> a [op] a
-    -- let binOpScheme = Forall (Set.fromList [binName]) $ Arrow binT EmptyRow (Arrow binT EmptyRow binT)
-    -- let expected = Arrow l_t l_e (Arrow r_t r_e result_t)
-
-    -- let intF = Arrow tInt l_e (Arrow tInt r_e tInt)
-    -- let boolF = Arrow tBool l_e (Arrow tBool r_e tBool)
-
-    -- binOpT <- instantiate binOpScheme
-
-    -- let base_constraints = case op of
-    --       P.Add -> [Equals (binOpT, intF)]
-    --       P.Subtract -> [Equals (binOpT, intF)]
-    --       P.And -> [Equals (binOpT, boolF)]
-    --       P.Or -> [Equals (binOpT, boolF)]
-
-
-    --let c = (Equals (binOpT, expected)):(Equals (l_e, r_e)):base_constraints
-    -- l_t -[l_e]-> r_t -[r_e]-> result_t ~ v1 -[e1]-> v1 -[e2]-> v1
-
 
     result_e <- fresh EVar >>= newvar
 
@@ -533,6 +552,7 @@ infer env = \case
       P.Subtract -> int_cs
       P.And -> bool_cs
       P.Or -> bool_cs
+
   Expr.Record (RecordExpr.RecordCstr assignments) -> do
     let do_infer (l, e) = do
           result <- infer env e
@@ -545,9 +565,11 @@ infer env = \case
     let constraints = foldl (\acc (_, (_, row_e, cst)) -> acc ++ cst ++ [Equals (record_e, row_e)]) [] c
     return (Record row, record_e, constraints)
   Expr.Record (RecordExpr.RecordAccess expr label) -> do
-    -- A |- e : { l : T | r }
-    -- -----------------------
-    --      A |- e.l : T
+    {-
+        Г |- e : { l : T | r }
+    ──────────────────────────────  [ RCRD-SELECT ]
+           Г |- e.l : T
+    -}
 
     fresht <- fresh TVar >>= newvar
     (expr_t, record_e, c) <- infer env expr
@@ -557,12 +579,15 @@ infer env = \case
 
     return (fresht, record_e, c ++ [Equals (expected_t, expr_t)])
   Expr.Record (RecordExpr.RecordExtension base name ext) -> do
-    --        A |- e1 : {p}     A |- e2 : T
-    -- --------------------------------------------------
-    --      A |- { e1 with l = e2 } : { l : T | p }
-    --
-    --  Input : e1, e2, l
-    --  Output : T, p
+    {-
+                Г |- e1 : { p }    Г |- e2 : T
+    ────────────────────────────────────────────────────  [ RCRD-EXTD ]
+           Г |- { e1 with l = e2 } : { l : T | p }
+
+      INPUT : e1, e2, l
+      OUTPUT : T, p
+    -}
+
 
     (base_t, base_e, cl) <- infer env base
     freshRow <- fresh RVar >>= newvar
@@ -576,8 +601,14 @@ infer env = \case
     return (result_t, ext_e, cl ++ cr ++ [Equals (expected_t, base_t), Equals (base_e, ext_e) ])
 
   Expr.Perform effect op arg  -> do
+    {-
+        Σ |- E
+
+    ────────────────────────────────────────────────────  [ RCRD-EXTD ]
+                   Г |- perform E.op : T ! E
+    -}
     fresh_t <- fresh TVar >>= newvar
-    fresh_e <- fresh EVar >>= newvar -- e3
+    fresh_e <- fresh EVar >>= newvar
     -- At this point we are just throwing an error if there is no effect info
     let effectInfo = envEffects env ! effect
     opType <- instantiate (effectInfoOps effectInfo ! op)
@@ -602,25 +633,17 @@ infer env = \case
           ]
 
     return (fresh_t, effect_t, cArg ++ effect_c)
-   {-
-      Γ ⊢ e : A ! {Op} ∪ E
-      Γ, x:A ⊢ e_ret : C ! E
-      Γ, x_op:T_in, k_op:(T_out → C ! E) ⊢ e_op : C ! E
-      ─────────────────────────────────────────────
-      Γ ⊢ handle e with { return x→e_ret, Op(x_op,k_op)→e_op } : C ! E
-  -}
-
   Expr.Handle expr hdlr -> do
-    -- These will be the result types of the handle constructs
+    {-
+        Γ ⊢ e : A ! (| Op | E |)                                                    -- the expresion is of type A with effect rows containng Op
+        Γ, x : A, e_ret : C ! E                                                     --
+        Γ, x_op : T_in, k_op : (T_out → C ! E) ⊢ e_op : C ! E                       -- Every op in the effect has the same result Type. There is something off here with k
+      ───────────────────────────────────────────────────────────────────────────
+        Γ ⊢ handle e with { return x -> e_ret, Op(x_op,k_op) -> e_op } : C ! E
+    -}
 
     -- First we need to infer what the computation type is we are handling.
     (bodyT, bodyE, bodyC) <- infer env expr
-
-    -- Tr.traceM $ "\n\n" ++ show bodyE ++ "\n" ++ show bodyC
-
-    -- _ <- error $ show bodyE
-
-    -- bodyT : Int
 
     -- This is the resulting type of the handler
     resultT <- fresh TVar >>= newvar
@@ -776,15 +799,15 @@ inferType expr =
 
 --- This maps t1 to t2 for some constraint c
 (-->) :: Type -> Type -> Constraint -> Constraint
-(-->) t1 t2 (Equals (ta, tb)) = Equals (substitute ta, substitute tb)
+(-->) t1 t2 constraint = case constraint of
+    (Equals (ta, tb)) -> Equals (substitute ta, substitute tb)
+    (Merge r1 r2 r3) -> Merge (substitute r1) (substitute r2) (substitute r3)
   where
     substitute typ
       | typ == t1 = t2
       | otherwise = case typ of
           Arrow a e b -> Arrow (substitute a) (substitute e) (substitute b)
           _ -> typ
-
--- (-->) _t1 _t2 _ = error "TODO: Only equality constraints are defined so far"
 
 --- Applies t1 --> t2 over a list of constraints
 (->>) :: Type -> Type -> [Constraint] -> [Constraint]
@@ -812,6 +835,34 @@ solve (c : cs) =
                 Row (_, t') r' -> solve $ cs ++ [Equals (t, t'), Equals(r, r')]
                 _ -> throwError $ InferenceError $ "Could not unify rows: " ++ prettyPrint t1 ++ " and " ++ prettyPrint t2
           _ -> throwError $ InferenceError $ "Could not unify " ++ prettyPrint t1 ++ " and " ++ prettyPrint t2
+    Merge rLeft rRight rFinal -> do
+        -- We need to deal with the merge constraint after other constraints
+        -- This is mainly since if rLeft and rRight are variables then we need to solve them first
+        s <- solve cs
+        let
+          rLeftT = apply s rLeft
+          rRightT = apply s rRight
+
+        if rLeftT == EmptyRow
+          then solve $ cs ++ [Equals (rFinal, rRightT)]
+        else if rRightT == EmptyRow
+          then solve $ cs ++ [Equals (rFinal, rLeftT)]
+        else case mergeRow rLeftT rRightT of
+          Left err -> throwError err
+          Right merged -> solve $ cs ++ [Equals (rFinal, merged)]
+
+mergeRow :: Type -> Type -> Either TypeError Type
+mergeRow r1 r2 = case (r1, r2) of
+  (Row l rt, r) -> do
+    rowTail <- mergeRow rt r
+    return $ Row l rowTail
+  (Var _, Row l rt) -> do
+    rowTail <- mergeRow r1 rt
+    return $ Row l rowTail
+  (EmptyRow, r) -> Right r
+  (r, EmptyRow) -> Right r
+  (Var _, Var _) -> Left . UnificationError $ "Can not merge two open rows"
+  (a, b) -> Left . UnificationError $ "Can only merge rows not (" ++ show a ++ ", " ++ show b ++ ")"
 
 -- TODO (kc): Need some unit tests
 getFreshVarMap :: Set String -> Infer (Map String String)

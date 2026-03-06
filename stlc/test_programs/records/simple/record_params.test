@@ -1,0 +1,5 @@
+name = "Records as parameters"
+phase = "eval"
+expect = "success"
+expected_type = "Forall (fromList []) (TCon \"Int\" [])"
+expected_value = "1"
