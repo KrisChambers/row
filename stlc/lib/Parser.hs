@@ -126,12 +126,7 @@ data Decl
   = EffectDecl String [String] [(String, Type)]
   | LetDecl String (Maybe Type) Expr
   | DataDecl String [(String, [Type])]
-  deriving
-    ( -- | TypeDecl String Type
-      Show,
-      Eq,
-      Ord
-    )
+  deriving (Show, Eq, Ord)
 
 data OpClause = OpClause [String] String Expr
   deriving (Show, Eq, Ord)

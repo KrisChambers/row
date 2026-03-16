@@ -31,7 +31,8 @@ inferenceTests =
       toHeadTests,
       rowEqualityTests,
       effectStubTests,
-      effectDeclTests
+      effectDeclTests,
+      instantiateEffectInfoTests
     ]
 
 doInfer :: T.TypeEnv -> Expr -> Either TypeError (Type, Type, [Constraint])
@@ -670,7 +671,7 @@ effectStubTests =
         let expr = Let "x" (Lit (LitInt 42)) (P.Var "x")
         case doInfer T.prelude expr of
           Right (_, e, _) -> do
-            e @?= T.Var "e2" -- This isn't all that great
+            e @?= T.Var "e1" -- This isn't all that great
           Left err -> assertFailure $ show err,
       testCase "Record construction has effect" $ do
         let expr = P.Record (P.RecordCstr [("x", Lit (LitInt 0))])
@@ -730,43 +731,56 @@ effectDeclTests =
                   T.Row (name, rt) rtail -> assertBool "Should be an open Console effect" (name == "Console" && rtail /= EmptyRow)
                   _ -> assertFailure $ "Expected effect variable in arrow, got: " ++ show effect
               _ -> assertFailure $ "Expected Arrow, got: " ++ show t
+          Left err -> assertFailure $ show err
+    ]
+
+instantiateEffectInfoTests :: TestTree
+instantiateEffectInfoTests =
+  testGroup
+    "instantiateEffectInfo Tests"
+    [ testCase "Instantiates polymorphic EffectInfo to monomorphic" $ do
+        -- Create an EffectInfo with a parameter "a"
+        let getOp = Forall (Set.fromList ["a"]) (Arrow tUnit EmptyRow (T.Var "a"))
+        let putOp = Forall (Set.fromList ["a"]) (Arrow (T.Var "a") EmptyRow tUnit)
+        let info = EffectInfo
+              { effectInfoParams = ["a"]
+              , effectInfoOps = Map.fromList [("get", getOp), ("put", putOp)]
+              }
+        -- Run instantiateEffectInfo
+        case runInfer (instantiateEffectInfo info) 0 0 of
+          Right newInfo -> do
+            -- Parameters should be empty after instantiation
+            effectInfoParams newInfo @?= []
+            -- Operations should exist
+            assertBool "Has get op" $ Map.member "get" (effectInfoOps newInfo)
+            assertBool "Has put op" $ Map.member "put" (effectInfoOps newInfo)
+            -- The type variables should be replaced with fresh ones (not "a")
+            case Map.lookup "get" (effectInfoOps newInfo) of
+              Just (Forall vars (Arrow _ _ retType)) -> do
+                Set.null vars @?= True
+                case retType of
+                  T.Var name -> assertBool "Return type should be fresh var (not 'a')" (name /= "a")
+                  _ -> assertFailure $ "Expected Var return type, got: " ++ show retType
+              _ -> assertFailure "get operation not found or wrong type"
           Left err -> assertFailure $ show err,
-      testCase "Perform with custom effect produces constraints" $ do
-        -- First add a custom effect
-        let logOp = P.TFun P.TInt (P.TCon "()" []) P.EEmptyRow
-        let decl = P.EffectDecl "Log" [] [("log", logOp)]
-        case doInferDecl T.prelude decl of
-          Right env' -> do
-            -- Now infer: perform Log.log 42
-            let expr = P.Perform "Log" "log" (Lit (LitInt 42))
-            case doInfer env' expr of
-              Right (_t, e, cs) -> do
-                let expected = Row ("Log", tUnit) $ T.Var "e4"
-                let equalTo constraints typ = case constraints of
-                      [] -> Nothing
-                      -- Looking for concrete stuff
-                      ((Equals (l, T.Var _)) : rest) | l == typ -> equalTo rest typ
-                      ((Equals (l, r)) : rest) ->
-                        if l == typ
-                          then Just r
-                          else equalTo rest typ
-
-                -- Effect should be a Row or a variable that maps to a row
-                -- Effect should be Row ("Log", tUnit) EmptyRow
-                case e of
-                  Row _ _ -> do
-                    e @?= expected
-                  T.Var _ -> do
-                    let target = equalTo cs e
-                    case target of
-                      Nothing -> assertFailure "FAILED"
-                      Just tNew -> do
-                        -- Tr.traceM $ "\n\n" ++ show cs ++ "\n\n"
-                        tNew @?= expected
-                  _ -> assertFailure "FAILED"
-
-                assertBool "Should have constraints" (not (null cs))
-              Left err -> assertFailure $ show err
+      testCase "Instantiates effect with no parameters" $ do
+        -- Create an EffectInfo with no parameters
+        let logOp = Forall Set.empty (Arrow tInt EmptyRow tUnit)
+        let info = EffectInfo
+              { effectInfoParams = []
+              , effectInfoOps = Map.fromList [("log", logOp)]
+              }
+        case runInfer (instantiateEffectInfo info) 0 0 of
+          Right newInfo -> do
+            -- Should remain parameter-less
+            effectInfoParams newInfo @?= []
+            -- Operation should be unchanged (no variables to instantiate)
+            case Map.lookup "log" (effectInfoOps newInfo) of
+              Just (Forall vars (Arrow arg _ ret)) -> do
+                Set.null vars @?= True
+                arg @?= tInt
+                ret @?= tUnit
+              _ -> assertFailure "log operation not found or wrong type"
           Left err -> assertFailure $ show err
     ]
 

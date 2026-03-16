@@ -14,6 +14,7 @@ module Type.Inference
     prelude,
     infer,
     instantiate,
+    instantiateEffectInfo,
     generalize,
     freeVars,
     inferType,
@@ -42,8 +43,8 @@ import Parser qualified as P
 import Report (Report (..))
 import Data.Bifunctor (bimap)
 import Debug.Trace qualified as Tr
-import Control.Monad (foldM)
-import Control.Monad (when)
+import Control.Monad (foldM, when)
+import Data.List(isInfixOf)
 
 
 data Type = Var String | Arrow Type Type Type | Record Type | EmptyRow | Row (String, Type) Type | TCon String [Type]
@@ -64,8 +65,44 @@ data EffectInfo = EffectInfo
   { effectInfoParams :: [String]
   , effectInfoOps :: Map String Scheme
   }
-  deriving (Show)
+  deriving (Show, Eq)
 
+
+-- s :: EffectInfo
+-- s = EffectInfo {
+--   effectInfoParams = ["a"]
+--   ,effectInfoOps = Map.fromList [
+--     ("get", Forall (Set.fromList ["a"]) (Arrow tUnit EmptyRow (Var "a"))),
+--     ("set", Forall (Set.fromList ["a"]) (Arrow (Var "a") EmptyRow tUnit))
+--     ]
+-- }
+
+stateEffect :: Scheme
+stateEffect = Forall (Set.fromList ["a"]) ( Record $ Row ("get", Arrow tUnit EmptyRow (Var "a")) ( Row ("set", Arrow (Var "a") EmptyRow tUnit) EmptyRow))
+
+effectScheme :: EffectInfo -> Scheme
+effectScheme (EffectInfo params ops) = Forall (Set.fromList params) (Record opsRows)
+  where
+    opsRows = foldr (\(lbl, Forall _ t) b -> Row (lbl, t) b) EmptyRow (Map.toList ops)
+
+schemeToInfo :: Scheme -> EffectInfo
+schemeToInfo (Forall params (Record r)) = EffectInfo
+  { effectInfoParams = Set.toList params
+  , effectInfoOps = Map.fromList rowOps
+  }
+  where
+    rowOps = toList r
+    toList EmptyRow = []
+    toList (Row (name, t) r') = (name, Forall params t):(toList r')
+    toList _ = error "Oops"
+schemeToInfo _ = error "Oops"
+
+instantiateEffectInfo :: EffectInfo -> Infer EffectInfo
+instantiateEffectInfo info = do
+  let scheme = effectScheme info
+  schemeT <- instantiate scheme
+  let newInfo = schemeToInfo (Forall mempty schemeT)
+  return newInfo
 {-
  effect State a {
    get : () -> a
@@ -81,9 +118,6 @@ data EffectInfo = EffectInfo
      "set" = forall a. a -> ()
    }
   }
-
-
-
 
 -}
 
@@ -161,13 +195,13 @@ prelude = TypeEnv
       ]
   }
 
-transformType :: P.Type -> Type
-transformType = \case
+transformType :: String -> [String] -> P.Type -> Type
+transformType effectName eparams = \case
   P.TVar name -> Var name
   P.TInt -> tInt
   P.TBool -> tBool
-  P.TCon name params -> TCon name $ map transformType params
-  P.TFun arg rtrn effect -> Arrow (transformType arg) (effectRow effect) (transformType rtrn)
+  P.TCon name params -> TCon name $ map (transformType effectName eparams) params
+  P.TFun arg rtrn effect -> Arrow (transformType effectName eparams arg) scopeEffect (transformType effectName eparams rtrn)
   P.TRecord row -> Record $ recordRow row
   where
     effectRow = \case
@@ -176,8 +210,12 @@ transformType = \case
         P.EVar name -> Var name
     recordRow = \case
         P.REmptyRow -> EmptyRow
-        P.RRowExtension label t rTail -> Row (label, transformType t) $ recordRow rTail
+        P.RRowExtension label t rTail -> Row (label, transformType effectName eparams t) $ recordRow rTail
         P.RVar name -> Var name
+    scopeEffect = Row (effectName, transformedParams) EmptyRow
+    transformedParams = if length eparams > 0
+        then Var "a"
+        else tUnit
 
 inferDecl :: [P.Decl] -> Either TypeError TypeEnv
 inferDecl ds =
@@ -198,35 +236,46 @@ addDeclToEnv env = \case
     P.LetDecl name t expr -> do
       (new_env, a) <- extend env name
       (tExpr, eExpr, cExpr) <- infer new_env expr
-      -- when (name == "add5To") $ do
-      --     Tr.traceM $ "\n"
-      --     Tr.traceM $ "\n\n" ++  show name ++ " : " ++ prettyPrint tExpr
-      --     Tr.traceM $ "\n" ++ prettyPrintList cExpr
-      --     Tr.traceM $ "\n" ++ show new_env
+      let constraints = (Equals (a, tExpr)):cExpr
 
-      let result = evalState (runExceptT $ solve cExpr) IdSub
+      let result = evalState (runExceptT $ solve constraints) IdSub
 
-      eExprGen <- case result of
-          Left err -> do
-            throwError $ UnificationError $ "Error unifying " ++ name ++ "\n" ++ prettyPrint expr ++ " :: " ++ show err
-          Right s -> return $ generalize $ apply s tExpr
+      sub <- case result of
+            Left err -> do
+              throwError $ UnificationError $ "Error unifying " ++ name ++ "\n" ++ prettyPrint expr ++ " :: " ++ show err
+            Right s -> return s
+
+      let eExprGen = generalize . apply sub $ tExpr
+
+      -- when ("MyConsole" `isInfixOf` show result) $ do
+      --     let tester = generalize(apply sub $ Arrow (Var "v2") (Var "e6") tUnit)
+      --     Tr.traceM "\n---- Final ----\n"
+      --     Tr.traceM $ show tester
+      --     Tr.traceM "\n---- Sub ----\n"
+      --     Tr.traceM $ show sub
+      --     Tr.traceM "\n---- Before ----\n"
+      --     Tr.traceM $ show tExpr
+      --     Tr.traceM "\n---- Result ----\n"
+      --     Tr.traceM $ show eExprGen
 
       let env' = extendVars new_env name eExprGen
 
       return env'
     P.EffectDecl name params ops -> do
-      let typedOps = map (\(n, t) -> (n, generalize $ transformType t )) ops
+      let typedOps = map (\(n, t) -> (n, generalize $ transformType name params t )) ops
+      -- when (name == "MyConsole") $ do
+      --   Tr.traceM $ "\n"
+      --   Tr.traceM $ "\n" ++ show name ++ " : " ++ show ops
+      --   Tr.traceM $ "\n\n"
       let info = EffectInfo {
         effectInfoParams = params,
         effectInfoOps = Map.fromList typedOps
       }
-
-      return $ extendEffects env name info
+      let opVars = map (\(op, scheme) -> (name ++ "." ++ op, scheme)) typedOps
+      let new_env = foldr (\(n, scheme) env' -> extendVars env' n scheme) env opVars
+      return $ extendEffects new_env name info
     P.DataDecl name cstrs -> do
       throwError $ InferenceError "Not Implemented"
-
-
-
 
 
 toHead :: Type -> String -> Type
@@ -280,7 +329,6 @@ instance Report Type where
             Var v -> v
             Row {} -> ","
             _ -> "ERROR"
-
 
 
 -- instance Report Scheme where
@@ -442,9 +490,25 @@ infer env = \case
 
     (t_e1, fe, cs_e1) <- infer env e1
     (t_e2, arg_e, cs_e2) <- infer env e2
-
     let t = Arrow t_e2 fresh_e fresh_t
     let constraints = cs_e1 ++ cs_e2 ++ [Equals (t_e1, t), Equals (fresh_e, fe), Equals (fresh_e, arg_e)]
+
+    -- when ("MyConsole" `isInfixOf` show e1) $ do
+    --   let remainingWidth value minL = if length value < minL
+    --         then minL - (length value)
+    --         else minL
+    --   let getSpaces value = take paddingSize $ repeat ' '
+    --         where paddingSize = remainingWidth value 20
+    --   let ppMap m = Map.foldrWithKey (\k v s -> s ++ k ++ (getSpaces k) ++ ":= " ++  show v ++ "\n" ) "" m
+    --   let sep name = "\n----" ++ insert ++ "--\n"
+    --         where insert = case name of
+    --                 "" -> ""
+    --                 x -> " " ++ x ++ " "
+
+    --   Tr.traceM $ sep "ENV" ++ ppMap (envVars env)
+    --   Tr.traceM $ sep "VARS" ++ show e1 ++ " : " ++ show t_e1
+    --   Tr.traceM $ show e2 ++ " : " ++ show t_e2 ++ sep ""
+    --   Tr.traceM $ sep "CONSTRAINTS" ++ show constraints
 
     return (fresh_t, fresh_e, constraints)
   Expr.Lit x -> do
@@ -460,16 +524,17 @@ infer env = \case
      ─────────────────────────────────────── [ LETPOLY ]
             Г |- let x = e1 in e2 : T
     -}
+    e_result <- fresh EVar >>= newvar
 
     -- Generate a type var a for variable name
     (new_env, a) <- extend env var_name
     -- generate type and constraints for the assign expression
-    (assign_t, e, assign_cs) <- infer new_env assign
+    (assign_t, assign_e, assign_cs) <- infer new_env assign
 
-    -- We follow the exmaples in the original paper by Leijen [Type Directed Compilation of Row-Typed Algebraic Effects]
+    -- We follow the examples in the paper by Leijen [Type Directed Compilation of Row-Typed Algebraic Effects]
     --  He mentions that requiring the infered effect `e` here to be EmptyRow (in other words assign is total)
-    --  Helps ensure soundness of the type system if we want to look into polymorphic reference cells at some point
-    --  (which I think we might).
+    --  Helps ensure soundness of the type system if we want to look into polymorphic reference cells at some point.
+    --  So why not.
     --
     --  Note.. We need to think about this a little bit..
     --    The way of doing effects seems to be to deal with sequential computations. At least that seems kind of implicit in their design.
@@ -502,8 +567,7 @@ infer env = \case
      - Effectively having Type Schemas, means we have associated
      - Constraint Schemas.
      -
-     - For now we are just solving the constraints in the let binding
-     - we may look at generating more constraints
+     - This seems pretty standard and keeps constraint generation under control
     -}
 
     -- generalize the let binding
@@ -512,14 +576,16 @@ infer env = \case
         throwError err
       Right s -> return $ generalize $ apply s assign_t
 
+    -- TODO: I think that this effectively overwrites the extension of var_name set to a
     -- add the type scheme to the environment
     let env' = new_env { envVars = Map.insert var_name assign_t_gen (envVars new_env) }
     -- generate type and constraints for body
     (body_t, body_e, body_cs) <- infer env' body
     assign_t_i <- instantiate assign_t_gen
-    let constraints = body_cs ++ assign_cs ++ [Equals (a, assign_t_i)]
+    let constraints = body_cs ++ assign_cs ++ [Equals (a, assign_t_i), Equals(e_result, body_e), Equals(e_result, assign_e)]
 
-    return (body_t, body_e, constraints)
+
+    return (body_t, e_result, constraints)
   Expr.If cond tr fl -> do
     {-
      Г |- f : T   Г |- t : T   Г |- b : Bool
@@ -602,37 +668,53 @@ infer env = \case
 
   Expr.Perform effect op arg  -> do
     {-
-        Σ |- E
-
-    ────────────────────────────────────────────────────  [ RCRD-EXTD ]
+        Σ |- E  ? I think this is really just application...
+    ────────────────────────────────────────────────────  [ PERFORM ]
                    Г |- perform E.op : T ! E
     -}
-    fresh_t <- fresh TVar >>= newvar
-    fresh_e <- fresh EVar >>= newvar
-    -- At this point we are just throwing an error if there is no effect info
-    let effectInfo = envEffects env ! effect
-    opType <- instantiate (effectInfoOps effectInfo ! op)
+    -- effectInfo <- case envEffects env !? effect of
+    --       Nothing -> throwError $ InferenceError $ "Key " ++ effect ++ " is not an effect"
+    --       Just a -> return a
+    let name = effect ++ "." ++ op
+    let appExpr = Expr.App (Expr.Var name) arg
+    e_result <- fresh EVar >>= newvar
 
-    (tArg, eArg, cArg) <- infer env arg
+    -- (new_env, op_t) <- extend env name
 
-    let t = Arrow tArg fresh_e fresh_t
+    (t, e, cs) <- infer env appExpr
 
-    -- I think this needs to be something like
-    -- (tArg, eArg, cArg) <- infer env arg
-    -- We need a constraint here that says opType = tArg -> {fresh_e} fresh_t?
-    -- effect on the arrow, args, resulting effect, all need to be the same?
-    -- I think perform is just a special application?
+    -- defined_type <- case effectInfoOps effectInfo !? op of
+    --       Nothing -> throwError $ InferenceError $ "Could not find op " ++ op
+    --       Just s -> instantiate s
 
-    eTail <- fresh EVar >>= newvar
+    return (t, e_result, (Equals(e, e_result):cs))
 
-    let effect_t = Row (effect, tUnit) eTail
-    let effect_c = [
-            Equals (t, opType),-- opType should be a functin type
-            Equals (fresh_e, eArg), -- Effect of the args matches fresh, which will match effect of opType based on how we construct t
-            Equals (fresh_e, effect_t) -- This is the resulting effect
-          ]
+     -- opType <- instantiate (effectInfoOps effectInfo ! op)
 
-    return (fresh_t, effect_t, cArg ++ effect_c)
+     -- fresh_t <- fresh TVar >>= newvar
+     -- fresh_e <- fresh EVar >>= newvar
+     -- -- At this point we are just throwing an error if there is no effect info
+
+     -- (tArg, eArg, cArg) <- infer env arg
+
+     -- let t = Arrow tArg fresh_e fresh_t
+
+     -- -- I think this needs to be something like
+     -- -- (tArg, eArg, cArg) <- infer env arg
+     -- -- We need a constraint here that says opType = tArg -> {fresh_e} fresh_t?
+     -- -- effect on the arrow, args, resulting effect, all need to be the same?
+     -- -- I think perform is just a special application?
+
+     -- eTail <- fresh EVar >>= newvar
+
+     -- let effect_t = Row (effect, tUnit) eTail
+     -- let effect_c = [
+     --         Equals (t, opType),-- opType should be a functin type
+     --         Equals (fresh_e, eArg), -- Effect of the args matches fresh, which will match effect of opType based on how we construct t
+     --         Equals (fresh_e, effect_t) -- This is the resulting effect
+     --       ]
+
+     -- return (fresh_t, effect_t, cArg ++ effect_c)
   Expr.Handle expr hdlr -> do
     {-
         Γ ⊢ e : A ! (| Op | E |)                                                    -- the expresion is of type A with effect rows containng Op
@@ -807,6 +889,8 @@ inferType expr =
       | typ == t1 = t2
       | otherwise = case typ of
           Arrow a e b -> Arrow (substitute a) (substitute e) (substitute b)
+          Row (l, t) r' -> Row (l, substitute t) (substitute r')
+          Record a -> Record $ substitute a
           _ -> typ
 
 --- Applies t1 --> t2 over a list of constraints

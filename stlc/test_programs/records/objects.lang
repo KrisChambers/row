@@ -1,0 +1,27 @@
+type Person = { name : String, age : Int }
+
+-- create : String -> Int -> Person
+let create = \name -> \age ->  { name, age }
+
+
+type Session = { conn : String }
+
+let createSession = \conn -> { conn }
+
+type PersonManager = {
+  create : String -> Age -> Person,
+  getByName : String -> Person
+  count : () -> Int
+}
+
+let insert = \session -> \person ->
+
+let personManager = \_ -> {
+  create = \person -> perform Session.insert(person),
+  read = \id -> perform Session.get(Person, id)
+}
+
+let main = \_ -> {
+
+
+

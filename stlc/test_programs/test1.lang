@@ -1,0 +1,8 @@
+effect OtherState a {
+  get : () -> a,
+  set : a -> ()
+}
+
+let main = \a ->
+  let myx = perform OtherState.get()
+  in perform OtherState.set (myx + 1)

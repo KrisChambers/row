@@ -1,0 +1,8 @@
+effect MyConsole {
+  print : Int -> ()
+}
+
+let main = \a ->
+  let
+    myname = 12345
+  in perform MyConsole.print myname

@@ -11,6 +11,7 @@ import qualified Parser as P
 import qualified Type.Inference as TI
 import qualified Interpreter as I
 import TestSpec
+import Data.Map ((!))
 import Debug.Trace qualified as Tr
 import Control.Monad (when)
 import Report (prettyPrint)
@@ -73,10 +74,13 @@ checkTypeCheck spec source = case P.parse_all source of
                 then checkErrorContains (tsErrorContains spec) (show err)
                 else assertFailure $ "Type error: " ++ show err
         Right env ->
+            let
+              mainT = TI.envVars env ! "main"
+            in
             if tsExpect spec == Success
                 then case tsExpectedType spec of
                     Nothing -> pure ()
-                    Just expected -> assertEqual "Type mismatch" (T.unpack expected) ("NOT IMPLEMENTED")
+                    Just expected -> assertEqual "Type mismatch" (T.unpack expected) (show mainT)
                 else assertFailure "Expected failure but type check succeeded"
 
 data Error = ParseError String | TypeError String | EvalError String

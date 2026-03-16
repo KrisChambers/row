@@ -65,7 +65,7 @@ recordTests =
 effectDeclTest :: TestTree
 effectDeclTest =
   let
-    eState = P.EffectDecl "State a" ["a"] [
+    eState = P.EffectDecl "State" ["a"] [
         ("get", P.TFun (P.TCon "()" []) (P.TCon "a" []) P.EEmptyRow),
         ("set", P.TFun (P.TCon "a" []) (P.TCon "()" []) P.EEmptyRow)
       ]
