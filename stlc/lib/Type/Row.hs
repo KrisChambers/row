@@ -1,15 +1,19 @@
 module Type.Row (
   Row (..),
   merge,
-  close,
   RowOperationError,
-  toHead
+  toHead,
+  close,
+  open
 ) where
 
 import Report (Report (..))
+import Data.Map (Map, (!?))
+import Data.Map qualified as Map
+
 
 data Row a = Row a (Row a) | EmptyRow | Var String
-  deriving(Show)
+  deriving(Show, Functor, Foldable, Traversable)
 
 rowStart :: String
 rowStart = "〈"
@@ -37,6 +41,11 @@ instance Eq a => Eq (Row a) where
   (==) EmptyRow _ = False
   (==) (Var a) (Var b) = a == b
   (==) (Var _) _ = False
+
+-- instance Functor Row where
+--   fmap f (Row l rest) = Row (f l) (fmap f rest)
+--   fmap _ EmptyRow = EmptyRow
+--   fmap _ (Var name) = Var name
 
 -- Since we are using "scoped" labels instead of lacks constraints
 toHead :: Eq a => Row a -> a -> Row a
@@ -73,3 +82,9 @@ close :: Row a -> Row a
 close EmptyRow = EmptyRow
 close (Var _) = EmptyRow
 close (Row b r') = Row b $ close r'
+
+open :: String -> Row a -> Row a
+open fresh EmptyRow = Var fresh
+open _ (Var a) = Var a
+open fresh (Row b r') = Row b $ open fresh r'
+
