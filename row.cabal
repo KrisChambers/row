@@ -60,13 +60,8 @@ library
 
     -- Modules exported by the library.
     exposed-modules:
-        MyLib,
         Parser,
-        Type,
         Type.Inference,
-        Type.Substitution,
-        Type.Environment,
-        Type.Row,
         Interpreter,
         Report
 

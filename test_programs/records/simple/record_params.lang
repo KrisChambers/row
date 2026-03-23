@@ -1,3 +1,4 @@
+
 partial : ({ r . s } -> a) -> r -> s -> a
 let partial = \func -> \paramR -> \rest ->
   let myRec = { rest with paramR }

@@ -44,7 +44,6 @@ import Report (Report (..))
 import Data.Bifunctor (bimap)
 import Debug.Trace qualified as Tr
 import Control.Monad (foldM, when)
-import Data.List(isInfixOf)
 
 
 data Type = Var String | Arrow Type Type Type | Record Type | EmptyRow | Row (String, Type) Type | TCon String [Type]
@@ -76,9 +75,6 @@ data EffectInfo = EffectInfo
 --     ("set", Forall (Set.fromList ["a"]) (Arrow (Var "a") EmptyRow tUnit))
 --     ]
 -- }
-
-stateEffect :: Scheme
-stateEffect = Forall (Set.fromList ["a"]) ( Record $ Row ("get", Arrow tUnit EmptyRow (Var "a")) ( Row ("set", Arrow (Var "a") EmptyRow tUnit) EmptyRow))
 
 effectScheme :: EffectInfo -> Scheme
 effectScheme (EffectInfo params ops) = Forall (Set.fromList params) (Record opsRows)
@@ -167,10 +163,6 @@ tUnit = TCon "()" []
 
 tString :: Type
 tString = TCon "String" []
-
-eConsole :: Type
-eConsole = Row ("Console", tUnit) EmptyRow
-
 
 prelude :: TypeEnv
 prelude = TypeEnv
@@ -427,11 +419,6 @@ fresh varType = do
 
   return $ prefix ++ show n
 
--- The type of some binary function
-binaryType :: Scheme
-binaryType = Forall (Set.fromList ["binary_var"]) (Arrow t_var EmptyRow (Arrow t_var EmptyRow t_var))
-  where
-    t_var = Var "binary_var"
 
 freeVars :: Type -> Set String
 freeVars t = case t of
@@ -785,12 +772,6 @@ getClauseConstraints env (P.OpClause args k body) = do
     let env' = extendMany env ((k, kT):argsT)
 
     infer env' body
-
-maybeToEither :: a ->  Maybe b -> Either a b
-maybeToEither dflt mayb
-  = case mayb of
-      Nothing -> Left dflt
-      Just v -> Right v
 
     {-
   Γ ⊢ e : A ! {Op} ∪ E
