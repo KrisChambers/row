@@ -517,6 +517,7 @@ declTests =
 
           Left err ->
             assertFailure $ show err,
+
       testCase "data Thing a = One a | Two a" $ do
         let decl = P.DataDecl ["a"] "Thing" [("One", [P.TVar "a"]), ("Two", [P.TVar "a"])]
         case doInferDecl T.prelude decl of
@@ -553,6 +554,46 @@ declTests =
             testLookup "Two" (envCstors env') $ \(T.CtorInfo typeName scheme) -> do
                 typeName @?= "Thing"
                 scheme @?= T.Forall (Set.fromList ["a"]) expectedType
+
+
+          Left err ->
+            assertFailure $ show err,
+
+      testCase "data List a = Nil | Cons a (List a)" $ do
+        let decl = P.DataDecl ["a"] "List" [("Nil", []), ("Cons", [P.TVar "a", P.TCon "List" [P.TVar "a"]])]
+        case doInferDecl T.prelude decl of
+          Right env' -> do
+            let varA = T.Var "a"
+            let listOfA = T.TApp (T.TCon "List") varA
+            let testLookup name envMap test = do
+                  case Map.lookup name envMap of
+                    Just value -> test value
+                    Nothing -> assertFailure $ "Could not find " ++ name ++ " in the environment"
+
+            testLookup "Nil" (envVars env') $ \(Forall vars t) -> do
+                  assertBool "Nil should be a value" (Set.null vars)
+                  t @?= listOfA
+
+            testLookup "Cons" (envVars env') $ \(Forall vars t) -> do
+                assertBool "Cons should have a single param" ("a" `elem` vars)
+                t @?= (T.Arrow varA EmptyRow $ T.Arrow listOfA EmptyRow listOfA)
+
+
+            -- Check that type info is properly stored
+
+            testLookup "List" (envTypes env') $ \(T.TypeInfo params kind) -> do
+                params @?= ["a"]
+                kind @?= T.KArrow T.KType T.KType
+
+            -- And check constructor information is added
+            testLookup "Nil" (envCstors env') $ \(T.CtorInfo typeName scheme) -> do
+                typeName @?= "List"
+                scheme @?= T.Forall (Set.fromList ["a"]) listOfA
+
+            -- And check constructor information is added
+            testLookup "Two" (envCstors env') $ \(T.CtorInfo typeName scheme) -> do
+                typeName @?= "Thing"
+                scheme @?= T.Forall (Set.fromList ["a"]) (T.Arrow varA EmptyRow $ T.Arrow listOfA EmptyRow listOfA)
 
 
           Left err ->
