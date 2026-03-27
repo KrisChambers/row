@@ -1,0 +1,7 @@
+let add = \x -> \r -> r.l + x
+
+let main = \r ->
+  if r.s
+    then add 1 r
+    else add 2 r
+

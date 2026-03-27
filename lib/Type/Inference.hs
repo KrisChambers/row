@@ -50,7 +50,7 @@ import Debug.Trace qualified as Tr
 import Control.Monad (foldM, when)
 
 
-data Type = Var String | Arrow Type Type Type | Record Type | EmptyRow | Row (String, Type) Type | TCon String [Type]
+data Type = Var String | Arrow Type Type Type | Record Type | EmptyRow | Row (String, Type) Type | TCon String | App Type Type
   deriving (Show, Ord)
 
 data Scheme = Forall (Set String) Type
@@ -398,7 +398,8 @@ instance Eq Type where
     case toHead r' a of
       Row (b, u) s -> b == a && t == u && r == s
       _ -> False
-  (==) (TCon n1 ts1) (TCon n2 ts2) = n1 == n2 && typesEqual
+  (==) (App a b) (App c d) = a == c && b == d
+  (==) (TCon n1) (TCon n2) = n1 == n2
       where
         typesEqual = foldr accumulator True $ zip ts1 ts2
         accumulator (t1, t2) a = a && t1 == t2
@@ -411,7 +412,7 @@ instance Eq Type where
 instance Report Type where
   prettyPrint t =
     case t of
-      TCon name params -> name ++ foldr (\a b -> b ++ " " ++ prettyPrint a) "" params
+      TCon name -> name -- ++ foldr (\a b -> b ++ " " ++ prettyPrint a) "" params
       Var name -> name
       Arrow d e r -> prettyPrint d ++ " -> " ++ prettyPrint r ++ " ! " ++ prettyPrint e
       Record row -> "{" ++ prettyPrint row ++ "}"
