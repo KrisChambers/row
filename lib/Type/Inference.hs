@@ -269,7 +269,7 @@ transformType effectName eparams = \case
   P.TVar name -> Var name
   P.TInt -> tInt
   P.TBool -> tBool
-  P.TCon name params -> foldr (\t acc -> TApp t acc) (TCon name) $ map (transformType effectName eparams) params
+  P.TCon name params -> foldr (\t acc -> TApp acc t) (TCon name) $ map (transformType effectName eparams) params
   P.TFun arg rtrn effect -> Arrow (transformType effectName eparams arg) scopeEffect (transformType effectName eparams rtrn)
   P.TRecord row -> Record $ recordRow row
   where
@@ -353,13 +353,20 @@ addDeclToEnv env = \case
       let mapTypes ts = map (transformType "" []) ts
       let cstrTypes = map (\(cstrName, ts) -> (cstrName, mapTypes ts)) cstrs
 
+      when (name == "List" && False) $ do
+          Tr.traceM "\n\n"
+          Tr.traceM $ show cstrTypes ++ "\n\n"
+
       -- This is describing the type on the level of kinds
       let typeInfo = TypeInfo params kind
-      let typeCstr = TCon name -- $ map Var params
+      let typeCstr = foldr (\t acc -> TApp acc t) (TCon name) $ map Var params
       -- Constructors here refer to data constructors (so taking terms to types)
       -- The info has the type scheme of the constructors
       -- For example: Nil for List a would have type forall a. List a. While Cons : forall a. a -> List a -> List a
       let cstorInfo = map (\(cstorName, args) -> (cstorName, CtorInfo name $ createCstrInfo typeCstr args )) cstrTypes
+      when (name == "List" && False) $ do
+          Tr.traceM "\n\n"
+          Tr.traceM $ show cstorInfo ++ "\n\n"
 
       let new_env = env {
         -- We add the kinding info about the type
@@ -925,6 +932,7 @@ generalize t = Forall vars closed_t
     closed_t = closeType t
     vars = case t of
       Arrow {} -> freeVars closed_t
+      TApp t1 t2 -> Set.union (freeVars t1) (freeVars t2)
       _ -> Set.empty
 
 -- TODO (kc): This needs some tests.
