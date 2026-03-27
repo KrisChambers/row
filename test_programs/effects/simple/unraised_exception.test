@@ -1,5 +1,5 @@
 name = "Unraised Exception"
 phase = "eval"
 expect = "success"
-expected_type = "Forall (fromList [\"v2\"]) (Arrow (Var \"v2\") EmptyRow (TCon \"Int\" []))"
+expected_type = "Forall (fromList [\"v2\"]) (Arrow (Var \"v2\") EmptyRow (TCon \"Int\"))"
 expected_value = "42"

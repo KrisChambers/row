@@ -1,5 +1,5 @@
 name = "Polymorphic Composition Type Inference"
 phase = "eval"
 expect = "success"
-expected_type = "Forall (fromList []) (TCon \"Int\" [])"
+expected_type = "Forall (fromList []) (TCon \"Int\")"
 expected_value = "3"

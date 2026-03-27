@@ -3,7 +3,7 @@
 module Type.Inference
   (
     lookupType,
-    Type (TCon, Var, Arrow, Record, EmptyRow, Row),
+    Type (TCon, Var, Arrow, Record, EmptyRow, Row, TApp),
     Scheme (Forall),
     TypeError (..),
     Substitution (IdSub, Single, Composed),
@@ -50,7 +50,7 @@ import Debug.Trace qualified as Tr
 import Control.Monad (foldM, when)
 
 
-data Type = Var String | Arrow Type Type Type | Record Type | EmptyRow | Row (String, Type) Type | TCon String | App Type Type
+data Type = Var String | Arrow Type Type Type | Record Type | EmptyRow | Row (String, Type) Type | TCon String | TApp Type Type
   deriving (Show, Ord)
 
 data Scheme = Forall (Set String) Type
@@ -229,16 +229,16 @@ extendCstors env name info = env { envCstors = Map.insert name info (envCstors e
 -}
 
 tBool :: Type
-tBool = TCon "Bool" []
+tBool = TCon "Bool"
 
 tInt :: Type
-tInt = TCon "Int" []
+tInt = TCon "Int"
 
 tUnit :: Type
-tUnit = TCon "()" []
+tUnit = TCon "()"
 
 tString :: Type
-tString = TCon "String" []
+tString = TCon "String"
 
 prelude :: TypeEnv
 prelude = TypeEnv
@@ -269,7 +269,7 @@ transformType effectName eparams = \case
   P.TVar name -> Var name
   P.TInt -> tInt
   P.TBool -> tBool
-  P.TCon name params -> TCon name $ map (transformType effectName eparams) params
+  P.TCon name params -> foldr (\t acc -> TApp t acc) (TCon name) $ map (transformType effectName eparams) params
   P.TFun arg rtrn effect -> Arrow (transformType effectName eparams arg) scopeEffect (transformType effectName eparams rtrn)
   P.TRecord row -> Record $ recordRow row
   where
@@ -355,7 +355,7 @@ addDeclToEnv env = \case
 
       -- This is describing the type on the level of kinds
       let typeInfo = TypeInfo params kind
-      let typeCstr = TCon name $ map Var params
+      let typeCstr = TCon name -- $ map Var params
       -- Constructors here refer to data constructors (so taking terms to types)
       -- The info has the type scheme of the constructors
       -- For example: Nil for List a would have type forall a. List a. While Cons : forall a. a -> List a -> List a
@@ -398,16 +398,14 @@ instance Eq Type where
     case toHead r' a of
       Row (b, u) s -> b == a && t == u && r == s
       _ -> False
-  (==) (App a b) (App c d) = a == c && b == d
+  (==) (TApp a b) (TApp c d) = a == c && b == d
   (==) (TCon n1) (TCon n2) = n1 == n2
-      where
-        typesEqual = foldr accumulator True $ zip ts1 ts2
-        accumulator (t1, t2) a = a && t1 == t2
   (==) (Var _) _ = False
   (==) (Arrow {}) _ = False
   (==) (Record _) _ = False
   (==) EmptyRow _ = False
   (==) (TCon {}) _ = False
+  (==) (TApp _ _) _ = False
 
 instance Report Type where
   prettyPrint t =
@@ -417,6 +415,7 @@ instance Report Type where
       Arrow d e r -> prettyPrint d ++ " -> " ++ prettyPrint r ++ " ! " ++ prettyPrint e
       Record row -> "{" ++ prettyPrint row ++ "}"
       EmptyRow -> ""
+      TApp a b -> prettyPrint a ++ " " ++ prettyPrint b
       Row (l, lt) rtail -> l ++ label_type ++ separator ++ " " ++ prettyPrint rtail
          where
           label_type = if lt /= tUnit
@@ -532,8 +531,9 @@ freeVars t = case t of
   Arrow t1 e t2 -> Set.union (Set.union (freeVars t1) (freeVars t2)) (freeVars e)
   Record row -> freeVars row
   Row (_, lt) rtail -> Set.union (freeVars lt) (freeVars rtail)
-  TCon _ ts -> foldr (\a b-> Set.union b $ freeVars a) Set.empty ts
+  TCon _ -> Set.empty -- foldr (\a b-> Set.union b $ freeVars a) Set.empty ts
   EmptyRow -> Set.empty
+  TApp t1 t2 -> Set.union (freeVars t1) (freeVars t2)
 
 newvar :: Monad m => String -> m Type
 

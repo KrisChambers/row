@@ -1,4 +1,4 @@
 name = "Test2"
 phase = "typecheck"
 expect = "success"
-expected_type = "Forall (fromList [\"v2\"]) (Arrow (Var \"v2\") (Row (\"MyConsole\",TCon \"()\" []) EmptyRow) (TCon \"()\" []))"
+expected_type = "Forall (fromList [\"v2\"]) (Arrow (Var \"v2\") (Row (\"MyConsole\",TCon \"()\") EmptyRow) (TCon \"()\"))"

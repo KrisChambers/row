@@ -485,7 +485,7 @@ declTests =
                   case Map.lookup name envMap of
                     Just value -> test value
                     Nothing -> assertFailure $ "Could not find " ++ name ++ " in the environment"
-            let expectedType = T.TCon "Thing" []
+            let expectedType = T.TCon "Thing"
 
             -- Check things are properly assemed in the term -> Type map
 
@@ -507,12 +507,12 @@ declTests =
             -- And check constructor information is added
             testLookup "One" (envCstors env') $ \(T.CtorInfo typeName scheme) -> do
                 typeName @?= "Thing"
-                scheme @?= T.Forall (Set.empty) (T.TCon "Thing" [])
+                scheme @?= T.Forall (Set.empty) (expectedType)
 
             -- And check constructor information is added
             testLookup "Two" (envCstors env') $ \(T.CtorInfo typeName scheme) -> do
                 typeName @?= "Thing"
-                scheme @?= T.Forall (Set.empty) (T.TCon "Thing" [])
+                scheme @?= T.Forall (Set.empty) (expectedType)
 
 
           Left err ->
@@ -525,7 +525,7 @@ declTests =
                   case Map.lookup name envMap of
                     Just value -> test value
                     Nothing -> assertFailure $ "Could not find " ++ name ++ " in the environment"
-            let expectedType = Arrow (T.Var "a") EmptyRow (T.TCon "Thing" [T.Var "a"])
+            let expectedType = Arrow (T.Var "a") EmptyRow (T.TApp (T.TCon "Thing") (T.Var "a"))
 
             -- Check things are properly assemed in the term -> Type map
 

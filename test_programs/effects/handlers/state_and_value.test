@@ -1,5 +1,5 @@
 name = "Return both the state and value"
 phase = "eval"
 expect = "success"
-expected_type = "Forall (fromList []) (Record (Row (\"state\",TCon \"Int\" []) (Row (\"value\",TCon \"Int\" []) EmptyRow)))"
+expected_type = "Forall (fromList []) (Record (Row (\"state\",TCon \"Int\") (Row (\"value\",TCon \"Int\") EmptyRow)))"
 expected_value = "{ value: 10, state: 10 }"
