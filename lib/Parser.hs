@@ -122,10 +122,40 @@ data EffectRow
   | EVar String
   deriving (Show, Eq, Ord)
 
+{-
+effect State a {
+  get : () -> a,
+  set : a -> ()
+}
+
+This essentially gives us a scheme:
+State = $forall$ a. {
+  get : () -<State a>-> a,
+  set : a -<State a>-> ()
+}
+
+data Stuff a
+  = Fun a
+  | Sad a
+}
+
+Stuff -> TypeInfo {
+  typeInfoParams = ["a"],
+  typeInfoKind = KArrow KType KType
+}
+
+Which could give us something like:
+  Stuff = $forall$ a. {
+    Fun : Int -> a -> Stuff a,
+    Sad : Bool -> a -> Stuff a
+  }
+
+-}
+
 data Decl
   = EffectDecl String [String] [(String, Type)]
   | LetDecl String (Maybe Type) Expr
-  | DataDecl String [(String, [Type])]
+  | DataDecl [String] String [(String, [Type])]
   deriving (Show, Eq, Ord)
 
 data OpClause = OpClause [String] String Expr
@@ -324,6 +354,7 @@ symbol p = opt_space >> p
 parens :: Parser a -> Parser a
 parens p = symbol (char '(') >> opt_space >> p <* symbol (char ')')
 
+-- TODO (kc): Need to figure out the type annotation stuff here.
 typeAtom :: Parser Type
 typeAtom =
   choice
@@ -351,11 +382,14 @@ typ = do
     Nothing -> t
     Just s -> TFun t s eff
 
+param_list :: Parser [String]
+param_list = many (try (notFollowedBy (symbol start_rec) >> opt_space >> lowerIdent))
+
 effect_declaration :: Parser Decl
 effect_declaration = do
   _ <- opt_space >> keyword "effect"
   name <- opt_space >> upperIdent
-  params <- many (try (notFollowedBy (symbol start_rec) >> opt_space >> lowerIdent))
+  params <- param_list
   _ <- opt_space >> start_rec
 
   let operation_definition = do
@@ -383,6 +417,7 @@ data_declaration :: Parser Decl
 data_declaration = do
   _ <- opt_space >> keyword "data"
   name <- opt_space >> upperIdent
+  params <- param_list
   -- data type params go here?
   _ <- opt_space >> char '='
 
@@ -394,7 +429,7 @@ data_declaration = do
 
   cstrs <- cstr `sepBy` try (opt_space >> char '|' >> opt_space)
 
-  return $ DataDecl name cstrs
+  return $ DataDecl params name cstrs
 
 declaration :: Parser Decl
 declaration
@@ -492,8 +527,8 @@ parse_expr =
     <|> try parse_if
     <|> try parse_lambda
     <|> try parse_binary_expr
-    <|> try parse_application
     <|> try parse_record_access
+    <|> try parse_application
     <|> try literal
 
 parse_type :: Parser (Maybe TypeAnn)

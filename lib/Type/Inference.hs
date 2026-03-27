@@ -11,6 +11,9 @@ module Type.Inference
     Infer,
     TypeEnv(..),
     EffectInfo(..),
+    TypeInfo(..),
+    Kind(..),
+    CtorInfo(..),
     prelude,
     infer,
     instantiate,
@@ -28,6 +31,7 @@ module Type.Inference
     tString,
     addDeclToEnv,
     inferDecl,
+    createCstrInfo
   )
 where
 
@@ -52,11 +56,14 @@ data Type = Var String | Arrow Type Type Type | Record Type | EmptyRow | Row (St
 data Scheme = Forall (Set String) Type
   deriving (Show, Eq)
 
+data Kind = KType | KArrow Kind Kind
+  deriving (Show, Eq)
+
 data TypeInfo = TypeInfo
     -- Ex : Functor a -> ["a"]
   { typeInfoParams :: [String]
     -- *, or * -> *, ?
-  , typeInfoKind :: String
+  , typeInfoKind :: Kind
   }
   deriving (Show)
 
@@ -66,15 +73,6 @@ data EffectInfo = EffectInfo
   }
   deriving (Show, Eq)
 
-
--- s :: EffectInfo
--- s = EffectInfo {
---   effectInfoParams = ["a"]
---   ,effectInfoOps = Map.fromList [
---     ("get", Forall (Set.fromList ["a"]) (Arrow tUnit EmptyRow (Var "a"))),
---     ("set", Forall (Set.fromList ["a"]) (Arrow (Var "a") EmptyRow tUnit))
---     ]
--- }
 
 effectScheme :: EffectInfo -> Scheme
 effectScheme (EffectInfo params ops) = Forall (Set.fromList params) (Record opsRows)
@@ -99,6 +97,7 @@ instantiateEffectInfo info = do
   schemeT <- instantiate scheme
   let newInfo = schemeToInfo (Forall mempty schemeT)
   return newInfo
+
 {-
  effect State a {
    get : () -> a
@@ -114,7 +113,6 @@ instantiateEffectInfo info = do
      "set" = forall a. a -> ()
    }
   }
-
 -}
 
 -- Contains constructor information.
@@ -151,6 +149,84 @@ extendVars env name scheme = env { envVars = Map.insert name scheme (envVars env
 extendEffects :: TypeEnv -> String -> EffectInfo -> TypeEnv
 extendEffects env name info = env { envEffects = Map.insert name info (envEffects env) }
 
+extendTypes :: TypeEnv -> String -> TypeInfo -> TypeEnv
+extendTypes env name info = env { envTypes = Map.insert name info (envTypes env) }
+
+extendCstors :: TypeEnv -> String -> CtorInfo -> TypeEnv
+extendCstors env name info = env { envCstors = Map.insert name info (envCstors env) }
+
+{-
+  I have confused myself a bit
+
+  For some type X we will have constructors
+    XInt Int, XFloat Float, XBool Bool
+
+    Each constructor defines a scheme
+    XInt : forall . Int -> X
+    XFloat : forall . Float -> X
+    XBool : forall . Bool -> X
+
+
+    So when I encounter a definition:
+      data X
+        = XInt Int
+        | XFloat Float
+        | XBool Bool
+
+    Something needs to represent X.
+    Currently, I have been treating this as a type constructor, but X is not a type constructor.
+    It is a new type in our system, which have constructors that create an instance of it.
+
+    So for this to work something needs to represent X in our types. We have been getting
+    away with using something like `TCon "X" []`.
+
+
+    lang := let myint = XInt 1
+
+    expr := Let "myint" (App (Var "XInt") (Lit 1))
+
+    1. Let "myint"
+        1.1 myint : a
+        1.2 infer (App "XInt" 1)
+          2.1 lookup XInt in variable environment? to get XInt = Int -> X
+          2.2 1 : Int
+          2.3 App XInt 1 : X
+
+
+    2.1 :: I think this would be an application of the tagging <l = T> as T?
+
+
+
+  Records + Row polymorphism is providing us with Sum Types
+
+  We want Variants as well (tagged unions)
+
+  Ex: data Maybe a = None | Some a
+
+  Subtly this is conflating 2 things.
+  1. Variants (the | on the right; Something can be one of these things)
+  2. Type Operators (Maybe :: KType => KType)
+
+  Maybe a :: * => * (Ex: Maybe Int :: Int -> Maybe Int, This is type operator application)
+
+  So our context will have term level bindings (some term t has type T)
+  and will also have operator bindings (some type variable X has kind K, I think this is our TypeINFO?)
+
+  When looking at a type declaration
+  1. Generate TypeInfo := data Maybe a -> TypeInfo ["a"] KArrow KType KType
+  2. Generate variant info?
+
+
+  I think we need to look into what would be reasonable here.
+  Restricted Type operator stuff would be nice. It may overlap with how we are doing effects
+
+
+
+
+
+
+
+-}
 
 tBool :: Type
 tBool = TCon "Bool" []
@@ -167,10 +243,10 @@ tString = TCon "String" []
 prelude :: TypeEnv
 prelude = TypeEnv
   { envTypes = Map.fromList
-      [ ("Int", TypeInfo [] "*")
-      , ("Bool", TypeInfo [] "*")
-      , ("String", TypeInfo [] "*")
-      , ("()", TypeInfo [] "*")
+      [ ("Int", TypeInfo [] KType) -- Note: We are not dealing with higher kinds right now, this seems like it won't be in our way.
+      , ("Bool", TypeInfo [] KType)
+      , ("String", TypeInfo [] KType)
+      , ("()", TypeInfo [] KType)
       ]
   , envEffects = Map.empty
   -- Map.fromList
@@ -187,6 +263,7 @@ prelude = TypeEnv
       ]
   }
 
+-- Transform a Syntactic type in an expression to a Type used by inference.
 transformType :: String -> [String] -> P.Type -> Type
 transformType effectName eparams = \case
   P.TVar name -> Var name
@@ -266,9 +343,37 @@ addDeclToEnv env = \case
       let opVars = map (\(op, scheme) -> (name ++ "." ++ op, scheme)) typedOps
       let new_env = foldr (\(n, scheme) env' -> extendVars env' n scheme) env opVars
       return $ extendEffects new_env name info
-    P.DataDecl name cstrs -> do
-      throwError $ InferenceError "Not Implemented"
+    P.DataDecl params name cstrs -> do
+      kind <- case length params of
+            0 -> do return KType
+            1 -> do return $ KArrow KType KType
+            _ -> throwError $ InferenceError "Not handling anything beyond * -> *"
 
+      -- Helpers to get Type inference Types (These need different names)
+      let mapTypes ts = map (transformType "" []) ts
+      let cstrTypes = map (\(cstrName, ts) -> (cstrName, mapTypes ts)) cstrs
+
+      -- This is describing the type on the level of kinds
+      let typeInfo = TypeInfo params kind
+      let typeCstr = TCon name $ map Var params
+      -- Constructors here refer to data constructors (so taking terms to types)
+      -- The info has the type scheme of the constructors
+      -- For example: Nil for List a would have type forall a. List a. While Cons : forall a. a -> List a -> List a
+      let cstorInfo = map (\(cstorName, args) -> (cstorName, CtorInfo name $ createCstrInfo typeCstr args )) cstrTypes
+
+      let new_env = env {
+        -- We add the kinding info about the type
+        envTypes = Map.insert name typeInfo (envTypes env),
+        -- The data constructors are added as terms.
+        envVars = foldr (\(cName, (CtorInfo _ b)) acc -> Map.insert cName b acc) (envVars env) cstorInfo,
+        -- The constructor metadata information is kept so we can identify the associated type
+        envCstors = foldr (\(cName, cInfo) acc -> Map.insert cName cInfo acc) (envCstors env) cstorInfo
+      }
+
+      return new_env
+
+createCstrInfo :: Type -> [Type] -> Scheme
+createCstrInfo cstredType ts = generalize $ foldr (\tp a -> Arrow tp EmptyRow a) cstredType ts
 
 toHead :: Type -> String -> Type
 toHead r l = case r of

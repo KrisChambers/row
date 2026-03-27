@@ -13,6 +13,8 @@ import Test.Tasty.HUnit
 import Test.Tasty.QuickCheck
 import Type.Inference
 import Type.Inference qualified as T
+import Control.Monad.Except
+import Control.Monad.State
 
 inferenceTests :: TestTree
 inferenceTests =
@@ -28,11 +30,12 @@ inferenceTests =
       declTests,
       propertyTests,
       recordTests,
-      toHeadTests,
+      helperTests,
       rowEqualityTests,
       effectStubTests,
       effectDeclTests,
-      instantiateEffectInfoTests
+      instantiateEffectInfoTests,
+      rowApplication
     ]
 
 doInfer :: T.TypeEnv -> Expr -> Either TypeError (Type, Type, [Constraint])
@@ -40,6 +43,12 @@ doInfer env expr = runInfer (infer env expr) 0 0
 
 doInferDecl :: T.TypeEnv -> P.Decl -> Either TypeError T.TypeEnv
 doInferDecl env decl = runInfer (addDeclToEnv env decl) 0 0
+
+
+doSolve :: [Constraint] -> Either TypeError Substitution
+doSolve cs = evalState unifyState IdSub
+  where
+    unifyState = runExceptT (solve cs)
 
 -- ============================================================================
 -- HUnit Tests
@@ -467,7 +476,87 @@ declTests =
           Left (InferenceError msg) ->
             assertBool "Error should mention variable" ("unknownVar" `isInfixOf` msg)
           Left err -> assertFailure $ "Wrong error type: " ++ show err
-          Right _ -> assertFailure "Should have failed"
+          Right _ -> assertFailure "Should have failed",
+      testCase "data Thing = One | Two" $ do
+        let decl = P.DataDecl [] "Thing" [("One", []), ("Two", [])]
+        case doInferDecl T.prelude decl of
+          Right env' -> do
+            let testLookup name envMap test = do
+                  case Map.lookup name envMap of
+                    Just value -> test value
+                    Nothing -> assertFailure $ "Could not find " ++ name ++ " in the environment"
+            let expectedType = T.TCon "Thing" []
+
+            -- Check things are properly assemed in the term -> Type map
+
+            testLookup "One" (envVars env') $ \(Forall vars t) -> do
+                  assertBool "Should be a type value" (Set.null vars)
+                  t @?= expectedType
+
+            testLookup "Two" (envVars env') $ \(Forall vars t) -> do
+                assertBool "Should be a type value" (Set.null vars)
+                t @?= expectedType
+
+
+            -- Check that type info is properly stored
+
+            testLookup "Thing" (envTypes env') $ \(T.TypeInfo params kind) -> do
+                params @?= []
+                kind @?= T.KType
+
+            -- And check constructor information is added
+            testLookup "One" (envCstors env') $ \(T.CtorInfo typeName scheme) -> do
+                typeName @?= "Thing"
+                scheme @?= T.Forall (Set.empty) (T.TCon "Thing" [])
+
+            -- And check constructor information is added
+            testLookup "Two" (envCstors env') $ \(T.CtorInfo typeName scheme) -> do
+                typeName @?= "Thing"
+                scheme @?= T.Forall (Set.empty) (T.TCon "Thing" [])
+
+
+          Left err ->
+            assertFailure $ show err,
+      testCase "data Thing a = One a | Two a" $ do
+        let decl = P.DataDecl ["a"] "Thing" [("One", [P.TVar "a"]), ("Two", [P.TVar "a"])]
+        case doInferDecl T.prelude decl of
+          Right env' -> do
+            let testLookup name envMap test = do
+                  case Map.lookup name envMap of
+                    Just value -> test value
+                    Nothing -> assertFailure $ "Could not find " ++ name ++ " in the environment"
+            let expectedType = Arrow (T.Var "a") EmptyRow (T.TCon "Thing" [T.Var "a"])
+
+            -- Check things are properly assemed in the term -> Type map
+
+            testLookup "One" (envVars env') $ \(Forall vars t) -> do
+                  assertBool "One should have a single param" ("a" `elem` vars)
+                  t @?= expectedType
+
+            testLookup "Two" (envVars env') $ \(Forall vars t) -> do
+                assertBool "Two should have a single param" ("a" `elem` vars)
+                t @?= expectedType
+
+
+            -- Check that type info is properly stored
+
+            testLookup "Thing" (envTypes env') $ \(T.TypeInfo params kind) -> do
+                params @?= ["a"]
+                kind @?= T.KArrow T.KType T.KType
+
+            -- And check constructor information is added
+            testLookup "One" (envCstors env') $ \(T.CtorInfo typeName scheme) -> do
+                typeName @?= "Thing"
+                scheme @?= T.Forall (Set.fromList ["a"]) expectedType
+
+            -- And check constructor information is added
+            testLookup "Two" (envCstors env') $ \(T.CtorInfo typeName scheme) -> do
+                typeName @?= "Thing"
+                scheme @?= T.Forall (Set.fromList ["a"]) expectedType
+
+
+          Left err ->
+            assertFailure $ show err
     ]
 
 recordTests :: TestTree
@@ -521,6 +610,40 @@ reportInferResult :: Type -> [Constraint] -> String
 reportInferResult t c = prefix ++ "Type: " ++ show t ++ prefix ++ "Constraints: " ++ show c
   where
     prefix = "\n\t"
+
+helperTests :: TestTree
+helperTests =
+  testGroup
+    "Helper Functions"
+    [ --createCstrInfoTests,
+      toHeadTests
+    ]
+
+-- createCstrInfoTests :: TestTree
+-- createCstrInfoTests =
+--   testGroup
+--     "createCstrInfo"
+--     [ testCase "Empty list returns tUnit" $ do
+--         createTestCstr [] @?= Forall mempty thingCstr,
+--       testCase "Single type creates Arrow to tUnit" $ do
+--         createTestCstr [tInt] @?= Forall mempty (Arrow tInt EmptyRow tUnit),
+--       testCase "Two types creates nested Arrow" $ do
+--         createTestCstr [tInt, tBool] @?= Forall mempty (Arrow tInt EmptyRow (Arrow tBool EmptyRow tUnit)),
+--       testCase "Three types creates 3-level nested Arrow" $ do
+--        createTestCstr [tInt, tBool, tString] @?= Arrow tInt EmptyRow (Arrow tBool EmptyRow (Arrow tString EmptyRow tUnit)),
+--       testCase "Mixed types with type variables" $ do
+--         T.createCstrInfo thingCstr [T.Var "a", tInt] @?= Arrow (T.Var "a") EmptyRow (Arrow tInt EmptyRow tUnit),
+--       testCase "All arrows use EmptyRow for effects" $ do
+--         let result = T.createCstrInfo thingCstr [tInt, tBool]
+--         case result of
+--           Arrow _ e1 (Arrow _ e2 tUnit) -> do
+--             e1 @?= EmptyRow
+--             e2 @?= EmptyRow
+--           _ -> assertFailure $ "Expected nested Arrow with EmptyRow effects, got: " ++ show result
+--     ]
+--     where
+--       createTestCstr params = T.createCstrInfo thingCstr params
+--       thingCstr = T.TCon "Thing" []
 
 toHeadTests :: TestTree
 toHeadTests =
@@ -781,6 +904,46 @@ instantiateEffectInfoTests =
                 arg @?= tInt
                 ret @?= tUnit
               _ -> assertFailure "log operation not found or wrong type"
+          Left err -> assertFailure $ show err
+    ]
+
+
+rowApplication :: TestTree
+rowApplication =
+  testGroup
+    "Row application to a function"
+    [ testCase "Full: f { l = 0, s = True } = 1" $ do
+        let body = P.If
+              (P.Record $ P.RecordAccess (P.Var "r") "s")
+              (P.BinOp P.Add (P.Record $ P.RecordAccess (P.Var "r") "l") (P.Lit $ P.LitInt 1))
+              (P.BinOp P.Add (P.Record $ P.RecordAccess (P.Var "r") "l") (P.Lit $ P.LitInt 2))
+        let f = P.Lambda "r" Nothing body
+        let arg = P.Record $ P.RecordCstr [("l", P.Lit $ P.LitInt 0), ("s", P.Lit $ P.LitBool True)]
+
+        let expr = P.App f arg
+
+        case doInfer T.prelude expr of
+          Right (t, _, c) -> case doSolve c of
+              Right s -> do
+                apply s t @?= tInt
+              Left err -> assertFailure $ show err
+          Left err -> assertFailure $ show err,
+
+      testCase "Partial: f { l = 0 } = ?" $ do
+        let body = P.If
+              (P.Record $ P.RecordAccess (P.Var "r") "s")
+              (P.BinOp P.Add (P.Record $ P.RecordAccess (P.Var "r") "l") (P.Lit $ P.LitInt 1))
+              (P.BinOp P.Add (P.Record $ P.RecordAccess (P.Var "r") "l") (P.Lit $ P.LitInt 2))
+        let f = P.Lambda "r" Nothing body
+        let arg = P.Record $ P.RecordCstr [("l", P.Lit $ P.LitInt 0)]
+
+        let expr = P.App f arg
+
+        case doInfer T.prelude expr of
+          Right (t, _, c) -> case doSolve c of
+              Right s -> do
+                apply s t @?= tInt
+              Left err -> assertFailure $ show err
           Left err -> assertFailure $ show err
     ]
 

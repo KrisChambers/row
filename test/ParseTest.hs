@@ -15,7 +15,8 @@ parseTests =
       effectDeclarationTests,
       letDeclarationTests,
       dataDeclarationTests,
-      handlerTests
+      handlerTests,
+      typeParsingTests
     ]
 
 test :: (Eq a, Show a) => P.Parser a -> String -> a -> Assertion
@@ -133,6 +134,22 @@ letDeclarationTests =
 --   = Stuff1 { x : Int, y: Int }
 --   | Stuff2 { name: String, age : String }
 
+typeParsingTests :: TestTree
+typeParsingTests =
+  testGroup
+    "Parsing type annotations"
+    [ testCase "Parsing some basic constructors" $ do
+        testInput
+          "Int"
+          $ P.TCon "Int" [],
+      testCase "Parsing some basic constructors" $ do
+        testInput
+          "(List a)"
+          $ P.TCon "List" [P.TVar "a"]
+    ]
+    where
+      testInput = test P.typ
+
 
 dataDeclarationTests :: TestTree
 dataDeclarationTests =
@@ -141,21 +158,29 @@ dataDeclarationTests =
     [ testCase "Simple data declaration" $ do
         testInput
           "data Test = STest String"
-          $ P.DataDecl "Test" [("STest", [P.TCon "String" []])],
+          $ P.DataDecl [] "Test" [("STest", [P.TCon "String" []])],
       testCase "Multiple Constructors" $ do
         testInput
           "data Test = STest String | ITest Int"
-          $ P.DataDecl "Test" [
+          $ P.DataDecl [] "Test" [
               ("STest", [P.TCon "String" []]),
               ("ITest", [P.TCon "Int" []])
               ],
       testCase "Constructors that take CLOSED Record Types" $ do
         testInput
           "data Test = STest { x: String } | ITest { y: Int }"
-          $ P.DataDecl "Test" [
+          $ P.DataDecl [] "Test" [
               ("STest", [P.TRecord $ P.RRowExtension "x" (P.TCon "String" []) P.REmptyRow]),
               ("ITest", [P.TRecord $ P.RRowExtension "y" (P.TCon "Int" []) P.REmptyRow])
+          ],
+      testCase "polymorphic List type" $ do
+        testInput
+          "data List a = Nil | Cons a (List a) "
+          $ P.DataDecl ["a"] "List" [
+              ("Nil", []),
+              ("Cons", [P.TVar "a", P.TCon "List" [P.TVar "a"] ])
           ]
+
     ]
   where
     testInput = test P.data_declaration
