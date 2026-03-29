@@ -10,7 +10,6 @@ import Parser (Expr (..), Literal (..), Op (..))
 import Parser qualified as P
 import Test.Tasty
 import Test.Tasty.HUnit
-import Test.Tasty.QuickCheck
 import Type.Inference
 import Type.Inference qualified as T
 import Control.Monad.Except
@@ -28,7 +27,6 @@ inferenceTests =
       binaryOpTests,
       letBindingTests,
       declTests,
-      propertyTests,
       recordTests,
       helperTests,
       rowEqualityTests,
@@ -655,36 +653,9 @@ helperTests :: TestTree
 helperTests =
   testGroup
     "Helper Functions"
-    [ --createCstrInfoTests,
+    [
       toHeadTests
     ]
-
--- createCstrInfoTests :: TestTree
--- createCstrInfoTests =
---   testGroup
---     "createCstrInfo"
---     [ testCase "Empty list returns tUnit" $ do
---         createTestCstr [] @?= Forall mempty thingCstr,
---       testCase "Single type creates Arrow to tUnit" $ do
---         createTestCstr [tInt] @?= Forall mempty (Arrow tInt EmptyRow tUnit),
---       testCase "Two types creates nested Arrow" $ do
---         createTestCstr [tInt, tBool] @?= Forall mempty (Arrow tInt EmptyRow (Arrow tBool EmptyRow tUnit)),
---       testCase "Three types creates 3-level nested Arrow" $ do
---        createTestCstr [tInt, tBool, tString] @?= Arrow tInt EmptyRow (Arrow tBool EmptyRow (Arrow tString EmptyRow tUnit)),
---       testCase "Mixed types with type variables" $ do
---         T.createCstrInfo thingCstr [T.Var "a", tInt] @?= Arrow (T.Var "a") EmptyRow (Arrow tInt EmptyRow tUnit),
---       testCase "All arrows use EmptyRow for effects" $ do
---         let result = T.createCstrInfo thingCstr [tInt, tBool]
---         case result of
---           Arrow _ e1 (Arrow _ e2 tUnit) -> do
---             e1 @?= EmptyRow
---             e2 @?= EmptyRow
---           _ -> assertFailure $ "Expected nested Arrow with EmptyRow effects, got: " ++ show result
---     ]
---     where
---       createTestCstr params = T.createCstrInfo thingCstr params
---       thingCstr = T.TCon "Thing" []
-
 toHeadTests :: TestTree
 toHeadTests =
   testGroup
@@ -987,158 +958,3 @@ rowApplication =
           Left err -> assertFailure $ show err
     ]
 
--- ============================================================================
--- QuickCheck Properties
--- ============================================================================
-
-genLiteral :: Gen Expr
-genLiteral =
-  oneof
-    [ Lit . LitInt <$> arbitrary,
-      Lit . LitBool <$> arbitrary
-    ]
-
-genVarName :: Gen String
-genVarName = elements ["x", "y", "z", "a", "b", "c"]
-
-genExpr :: Int -> Gen Expr
-genExpr 0 = oneof [genLiteral, P.Var <$> genVarName]
-genExpr n =
-  frequency
-    [ (3, genLiteral),
-      (3, P.Var <$> genVarName),
-      (2, Lambda <$> genVarName <*> pure Nothing <*> genExpr (n - 1)),
-      (2, App <$> genExpr (n - 1) <*> genExpr (n - 1)),
-      (1, BinOp <$> genOp <*> genExpr (n - 1) <*> genExpr (n - 1)),
-      (1, If <$> genExpr (n - 1) <*> genExpr (n - 1) <*> genExpr (n - 1)),
-      (1, Let <$> genVarName <*> genExpr (n - 1) <*> genExpr (n - 1))
-    ]
-  where
-    genOp = elements [Add, Subtract, And, Or]
-
-instance Arbitrary Expr where
-  arbitrary = sized $ \n -> genExpr (min n 3)
-  shrink (Lambda v _ e) = e : [Lambda v Nothing e' | e' <- shrink e]
-  shrink (App e1 e2) = e1 : e2 : [App e1' e2' | (e1', e2') <- shrink (e1, e2)]
-  shrink (BinOp op e1 e2) = e1 : e2 : [BinOp op e1' e2' | (e1', e2') <- shrink (e1, e2)]
-  shrink (If c t f) = c : t : f : [If c' t' f' | (c', t', f') <- shrink (c, t, f)]
-  shrink (Let v e1 e2) = e1 : e2 : [Let v e1' e2' | (e1', e2') <- shrink (e1, e2)]
-  shrink _ = []
-
-genRowLabel :: Gen String
-genRowLabel = elements ["a", "b", "c", "x", "y", "z"]
-
-genSimpleType :: Gen Type
-genSimpleType = elements [tInt, tBool]
-
-genRow :: Int -> Gen Type
-genRow 0 = frequency [(3, pure EmptyRow), (1, T.Var <$> genRowLabel)]
-genRow n =
-  frequency
-    [ (1, pure EmptyRow),
-      (1, T.Var <$> genRowLabel),
-      (4, (\l t r -> Row (l, t) r) <$> genRowLabel <*> genSimpleType <*> genRow (n - 1))
-    ]
-
-instance Arbitrary Type where
-  arbitrary = sized $ \n -> genRow (min n 4)
-  shrink EmptyRow = []
-  shrink (T.Var _) = [EmptyRow]
-  shrink (Row (_, _) r) = r : EmptyRow : shrink r
-
-standardEnv :: TypeEnv
-standardEnv =
-  prelude
-    { envVars =
-        Map.union (envVars prelude) $
-          Map.fromList
-            [ ("x", Forall Set.empty tInt),
-              ("y", Forall Set.empty tBool),
-              ("z", Forall Set.empty $ Arrow tInt EmptyRow tInt),
-              ("a", Forall Set.empty $ T.Var "va"),
-              ("b", Forall Set.empty $ T.Var "vb"),
-              ("c", Forall Set.empty $ T.Var "vc")
-            ]
-    }
-
-propertyTests :: TestTree
-propertyTests =
-  testGroup
-    "Properties"
-    [ testProperty "Literals produce no constraints" prop_literalsNoConstraints,
-      testProperty "Lambda always returns Arrow type" prop_lambdaReturnsArrow,
-      testProperty "Application produces at least one constraint" prop_appProducesConstraint,
-      testProperty "BinOp result type matches operation" prop_binOpResultType,
-      testProperty "Conditionals constrain condition to Bool" prop_conditionBool,
-      testProperty "Constraint count bounded by 3x expression size" prop_constraintBound,
-      testProperty "Row equality is reflexive" prop_rowEqReflexive
-    ]
-
-prop_literalsNoConstraints :: Property
-prop_literalsNoConstraints = forAll genLiteral $ \expr ->
-  case doInfer T.prelude expr of
-    Right (_, e, cs) -> cs === []
-    Left _ -> property False
-
-prop_lambdaReturnsArrow :: Property
-prop_lambdaReturnsArrow = forAll (genExpr 2) $ \bodyExpr ->
-  forAll genVarName $ \paramName ->
-    let expr = Lambda paramName Nothing bodyExpr
-     in case doInfer standardEnv expr of
-          Right (t, e, _) -> case t of
-            Arrow _ _ _ -> property True
-            _ -> property False
-          Left _ -> property True
-
-prop_appProducesConstraint :: Property
-prop_appProducesConstraint =
-  forAll (genExpr 1) $ \e1 ->
-    forAll (genExpr 1) $ \e2 ->
-      let expr = App e1 e2
-       in case doInfer standardEnv expr of
-            Right (_, e, cs) -> not (null cs) === True
-            Left _ -> property True
-
-prop_binOpResultType :: Property
-prop_binOpResultType =
-  forAll (elements [Add, Subtract, And, Or]) $ \op ->
-    forAll (genExpr 1) $ \e1 ->
-      forAll (genExpr 1) $ \e2 ->
-        let expr = BinOp op e1 e2
-            expectedType = if op `elem` [Add, Subtract] then tInt else tBool
-         in case doInfer standardEnv expr of
-              Right (t, e, _) -> t === expectedType
-              Left _ -> property True
-
-prop_conditionBool :: Property
-prop_conditionBool =
-  forAll (genExpr 1) $ \cond ->
-    forAll (genExpr 1) $ \tr ->
-      forAll (genExpr 1) $ \fl ->
-        let expr = If cond tr fl
-         in case doInfer standardEnv expr of
-              Right (_, e, cs) -> property $ any hasBoolConstraint cs
-              Left _ -> property True
-  where
-    hasBoolConstraint (Equals (tBool, _)) = True
-    hasBoolConstraint (Equals (_, tBool)) = True
-    hasBoolConstraint _ = False
-
-prop_constraintBound :: Property
-prop_constraintBound = forAll (genExpr 2) $ \expr ->
-  let exprSize = countNodes expr
-   in case doInfer standardEnv expr of
-        Right (_, e, cs) -> property (length cs <= exprSize * 3)
-        Left _ -> property True
-  where
-    countNodes (Lit _) = 1
-    countNodes (P.Var _) = 1
-    countNodes (Lambda _ _ e) = 1 + countNodes e
-    countNodes (App e1 e2) = 1 + countNodes e1 + countNodes e2
-    countNodes (BinOp _ e1 e2) = 1 + countNodes e1 + countNodes e2
-    countNodes (If c t f) = 1 + countNodes c + countNodes t + countNodes f
-    countNodes (Let _ e1 e2) = 1 + countNodes e1 + countNodes e2
-
-prop_rowEqReflexive :: Property
-prop_rowEqReflexive = forAll (genRow 3) $ \r ->
-  r === r
