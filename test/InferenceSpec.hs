@@ -33,7 +33,8 @@ inferenceTests =
       effectStubTests,
       effectDeclTests,
       instantiateEffectInfoTests,
-      rowApplication
+      rowApplication,
+      dataConstructionTest
     ]
 
 doInfer :: T.TypeEnv -> Expr -> Either TypeError (Type, Type, [Constraint])
@@ -41,6 +42,19 @@ doInfer env expr = runInfer (infer env expr) 0 0
 
 doInferDecl :: T.TypeEnv -> P.Decl -> Either TypeError T.TypeEnv
 doInferDecl env decl = runInfer (addDeclToEnv env decl) 0 0
+
+doInferDecls :: [P.Decl] -> Either TypeError T.TypeEnv
+doInferDecls decls = inferDecl decls
+
+
+-- _doInferDecls environ decls []
+--     where
+--         _doInferDecls env (d:ds) errs = case doInferDecl env d of
+--               Left err -> _doInferDecls env ds ((d, err):errs)
+--               Right env' -> _doInferDecls env' ds errs
+--         _doInferDecls env [] errs = if length errs > 0
+--                                       then Left errs
+--                                       else Right env
 
 
 doSolve :: [Constraint] -> Either TypeError Substitution
@@ -917,6 +931,25 @@ instantiateEffectInfoTests =
               _ -> assertFailure "log operation not found or wrong type"
           Left err -> assertFailure $ show err
     ]
+
+dataConstructionTest :: TestTree
+dataConstructionTest =
+  testGroup
+  "Data construction tests"
+  [
+    testCase "Simple List: [1]" $ do
+      let fName = "main"
+      let eList = P.DataDecl ["a"] "List" [("Nil", []), ("Cons", [P.TVar "a", P.TCon "List" [P.TVar "a"]])]
+      let expr = P.LetDecl fName Nothing $ P.App (P.App (P.Var "Cons") (P.Lit $ P.LitInt 1)) (P.Var "Nil")
+
+      case inferDecl [eList, expr] of
+        Left err -> assertFailure $ show err
+        Right env ->  case Map.lookup fName (envVars env) of
+            Just t -> do
+              t @?= (Forall mempty $ T.TApp (T.TCon "List") (T.TCon "Int"))
+            _ -> assertFailure "Boop"
+
+  ]
 
 
 rowApplication :: TestTree

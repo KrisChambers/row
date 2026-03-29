@@ -1,54 +1,53 @@
 {- HLINT ignore "Use newtype instead of data" -}
 -- TODO (kc): Turning this off until we start implementing new Constraints
-module Type.Inference
-  (
-    lookupType,
-    Type (TCon, Var, Arrow, Record, EmptyRow, Row, TApp),
-    Scheme (Forall),
-    TypeError (..),
-    Substitution (IdSub, Single, Composed),
-    Constraint (..),
-    Infer,
-    TypeEnv(..),
-    EffectInfo(..),
-    TypeInfo(..),
-    Kind(..),
-    CtorInfo(..),
-    prelude,
-    infer,
-    instantiate,
-    instantiateEffectInfo,
-    generalize,
-    freeVars,
-    inferType,
-    runInfer,
-    toHead,
-    solve,
-    apply,
-    tInt,
-    tBool,
-    tUnit,
-    tString,
-    addDeclToEnv,
-    inferDecl,
-    createCstrInfo
-  )
+module Type.Inference (
+  lookupType,
+  Type (TCon, Var, Arrow, Record, EmptyRow, Row, TApp),
+  Scheme (Forall),
+  TypeError (..),
+  Substitution (IdSub, Single, Composed),
+  Constraint (..),
+  Infer,
+  TypeEnv (..),
+  EffectInfo (..),
+  TypeInfo (..),
+  Kind (..),
+  CtorInfo (..),
+  prelude,
+  infer,
+  instantiate,
+  instantiateEffectInfo,
+  generalize,
+  freeVars,
+  inferType,
+  runInfer,
+  toHead,
+  solve,
+  apply,
+  tInt,
+  tBool,
+  tUnit,
+  tString,
+  addDeclToEnv,
+  inferDecl,
+  createCstrInfo,
+)
 where
 
+import Control.Monad (foldM, when)
 import Control.Monad.Except
 import Control.Monad.State
-import Data.Map (Map, (!?), (!))
+import Data.Bifunctor (bimap)
+import Data.Map (Map, (!), (!?))
 import Data.Map qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
-import Parser qualified as Expr (Expr (..))
-import Parser qualified as RecordExpr (RecordExpr (..))
-import Parser qualified as P
-import Report (Report (..))
-import Data.Bifunctor (bimap)
 import Debug.Trace qualified as Tr
-import Control.Monad (foldM, when)
-
+import Parser qualified as Expr (Expr (..))
+import Parser qualified as P
+import Parser qualified as RecordExpr (RecordExpr (..))
+import Report (Report (..))
+import Data.List (isInfixOf)
 
 data Type = Var String | Arrow Type Type Type | Record Type | EmptyRow | Row (String, Type) Type | TCon String | TApp Type Type
   deriving (Show, Ord)
@@ -60,10 +59,10 @@ data Kind = KType | KArrow Kind Kind
   deriving (Show, Eq)
 
 data TypeInfo = TypeInfo
-    -- Ex : Functor a -> ["a"]
+  -- Ex : Functor a -> ["a"]
   { typeInfoParams :: [String]
-    -- *, or * -> *, ?
-  , typeInfoKind :: Kind
+  , -- \*, or * -> *, ?
+    typeInfoKind :: Kind
   }
   deriving (Show)
 
@@ -73,22 +72,22 @@ data EffectInfo = EffectInfo
   }
   deriving (Show, Eq)
 
-
 effectScheme :: EffectInfo -> Scheme
 effectScheme (EffectInfo params ops) = Forall (Set.fromList params) (Record opsRows)
-  where
-    opsRows = foldr (\(lbl, Forall _ t) b -> Row (lbl, t) b) EmptyRow (Map.toList ops)
+ where
+  opsRows = foldr (\(lbl, Forall _ t) b -> Row (lbl, t) b) EmptyRow (Map.toList ops)
 
 schemeToInfo :: Scheme -> EffectInfo
-schemeToInfo (Forall params (Record r)) = EffectInfo
-  { effectInfoParams = Set.toList params
-  , effectInfoOps = Map.fromList rowOps
-  }
-  where
-    rowOps = toList r
-    toList EmptyRow = []
-    toList (Row (name, t) r') = (name, Forall params t):(toList r')
-    toList _ = error "Oops"
+schemeToInfo (Forall params (Record r)) =
+  EffectInfo
+    { effectInfoParams = Set.toList params
+    , effectInfoOps = Map.fromList rowOps
+    }
+ where
+  rowOps = toList r
+  toList EmptyRow = []
+  toList (Row (name, t) r') = (name, Forall params t) : (toList r')
+  toList _ = error "Oops"
 schemeToInfo _ = error "Oops"
 
 instantiateEffectInfo :: EffectInfo -> Infer EffectInfo
@@ -129,31 +128,32 @@ data TypeEnv = TypeEnv
   , envEffects :: Map String EffectInfo
   , envVars :: Map String Scheme
   , envCstors :: Map String CtorInfo
+  , envDecls :: Map String P.Decl
   }
 
 instance Show TypeEnv where
   show t = "\n{" ++ (foldr (\a b -> b ++ "\n" ++ a) "" components) ++ "\n}"
-    where
-      components = [showTypes, showEffects, showVars, showCstrs]
-      showTypes = foldr (\(name, info) b -> b ++ "\n\t" ++ name ++ " : " ++ show info) "\t" (Map.toList $ envTypes t)
-      showEffects = foldr (\(name, info) b -> b ++ "\n\t" ++ name ++" : " ++ show info) "\t" (Map.toList $ envEffects t)
-      showVars = foldr (\(name, info) b -> b ++ "\n\t" ++ name ++ " : " ++show info) "\t" (Map.toList $ envVars t)
-      showCstrs = foldr (\(name, info) b -> b ++ "\n\t" ++ name ++ " : " ++show info) "\t" (Map.toList $ envCstors t)
+   where
+    components = [showTypes, showEffects, showVars, showCstrs]
+    showTypes = foldr (\(name, info) b -> b ++ "\n\t" ++ name ++ " : " ++ show info) "\t" (Map.toList $ envTypes t)
+    showEffects = foldr (\(name, info) b -> b ++ "\n\t" ++ name ++ " : " ++ show info) "\t" (Map.toList $ envEffects t)
+    showVars = foldr (\(name, info) b -> b ++ "\n\t" ++ name ++ " : " ++ show info) "\t" (Map.toList $ envVars t)
+    showCstrs = foldr (\(name, info) b -> b ++ "\n\t" ++ name ++ " : " ++ show info) "\t" (Map.toList $ envCstors t)
 
 lookupType :: TypeEnv -> String -> Maybe Scheme
 lookupType env varName = Map.lookup varName $ envVars env
 
 extendVars :: TypeEnv -> String -> Scheme -> TypeEnv
-extendVars env name scheme = env { envVars = Map.insert name scheme (envVars env) }
+extendVars env name scheme = env{envVars = Map.insert name scheme (envVars env)}
 
 extendEffects :: TypeEnv -> String -> EffectInfo -> TypeEnv
-extendEffects env name info = env { envEffects = Map.insert name info (envEffects env) }
+extendEffects env name info = env{envEffects = Map.insert name info (envEffects env)}
 
 extendTypes :: TypeEnv -> String -> TypeInfo -> TypeEnv
-extendTypes env name info = env { envTypes = Map.insert name info (envTypes env) }
+extendTypes env name info = env{envTypes = Map.insert name info (envTypes env)}
 
 extendCstors :: TypeEnv -> String -> CtorInfo -> TypeEnv
-extendCstors env name info = env { envCstors = Map.insert name info (envCstors env) }
+extendCstors env name info = env{envCstors = Map.insert name info (envCstors env)}
 
 {-
   I have confused myself a bit
@@ -165,7 +165,6 @@ extendCstors env name info = env { envCstors = Map.insert name info (envCstors e
     XInt : forall . Int -> X
     XFloat : forall . Float -> X
     XBool : forall . Bool -> X
-
 
     So when I encounter a definition:
       data X
@@ -180,7 +179,6 @@ extendCstors env name info = env { envCstors = Map.insert name info (envCstors e
     So for this to work something needs to represent X in our types. We have been getting
     away with using something like `TCon "X" []`.
 
-
     lang := let myint = XInt 1
 
     expr := Let "myint" (App (Var "XInt") (Lit 1))
@@ -192,10 +190,7 @@ extendCstors env name info = env { envCstors = Map.insert name info (envCstors e
           2.2 1 : Int
           2.3 App XInt 1 : X
 
-
     2.1 :: I think this would be an application of the tagging <l = T> as T?
-
-
 
   Records + Row polymorphism is providing us with Sum Types
 
@@ -216,16 +211,8 @@ extendCstors env name info = env { envCstors = Map.insert name info (envCstors e
   1. Generate TypeInfo := data Maybe a -> TypeInfo ["a"] KArrow KType KType
   2. Generate variant info?
 
-
   I think we need to look into what would be reasonable here.
   Restricted Type operator stuff would be nice. It may overlap with how we are doing effects
-
-
-
-
-
-
-
 -}
 
 tBool :: Type
@@ -241,27 +228,25 @@ tString :: Type
 tString = TCon "String"
 
 prelude :: TypeEnv
-prelude = TypeEnv
-  { envTypes = Map.fromList
-      [ ("Int", TypeInfo [] KType) -- Note: We are not dealing with higher kinds right now, this seems like it won't be in our way.
-      , ("Bool", TypeInfo [] KType)
-      , ("String", TypeInfo [] KType)
-      , ("()", TypeInfo [] KType)
-      ]
-  , envEffects = Map.empty
-  -- Map.fromList
-  --   [ ("Console", EffectInfo [] $ Map.fromList
-  --       [ ("print", Forall Set.empty $ Arrow tString eConsole tUnit),
-  --         ("read", Forall Set.empty $ Arrow tUnit eConsole tString)
-  --       ])
-  --   ]
-  , envVars = Map.fromList [("()", Forall Set.empty tUnit)]
-  , envCstors = Map.fromList
-      [ ("True", CtorInfo "Bool" (Forall Set.empty tBool))
-      , ("False", CtorInfo "Bool" (Forall Set.empty tBool))
-      , ("()", CtorInfo "()" (Forall Set.empty tUnit))
-      ]
-  }
+prelude =
+  TypeEnv
+    { envTypes =
+        Map.fromList
+          [ ("Int", TypeInfo [] KType) -- Note: We are not dealing with higher kinds right now, this seems like it won't be in our way.
+          , ("Bool", TypeInfo [] KType)
+          , ("String", TypeInfo [] KType)
+          , ("()", TypeInfo [] KType)
+          ]
+    , envEffects = mempty
+    , envVars = Map.fromList [("()", Forall Set.empty tUnit)]
+    , envCstors =
+        Map.fromList
+          [ ("True", CtorInfo "Bool" (Forall Set.empty tBool))
+          , ("False", CtorInfo "Bool" (Forall Set.empty tBool))
+          , ("()", CtorInfo "()" (Forall Set.empty tUnit))
+          ]
+    , envDecls = mempty
+    }
 
 -- Transform a Syntactic type in an expression to a Type used by inference.
 transformType :: String -> [String] -> P.Type -> Type
@@ -272,112 +257,134 @@ transformType effectName eparams = \case
   P.TCon name params -> foldr (\t acc -> TApp acc t) (TCon name) $ map (transformType effectName eparams) params
   P.TFun arg rtrn effect -> Arrow (transformType effectName eparams arg) scopeEffect (transformType effectName eparams rtrn)
   P.TRecord row -> Record $ recordRow row
-  where
-    effectRow = \case
-        P.EEmptyRow -> EmptyRow
-        P.ERowExtension label eTail -> Row (label, tUnit) $ effectRow eTail
-        P.EVar name -> Var name
-    recordRow = \case
-        P.REmptyRow -> EmptyRow
-        P.RRowExtension label t rTail -> Row (label, transformType effectName eparams t) $ recordRow rTail
-        P.RVar name -> Var name
-    scopeEffect = Row (effectName, transformedParams) EmptyRow
-    transformedParams = if length eparams > 0
-        then Var "a"
-        else tUnit
+ where
+  effectRow = \case
+    P.EEmptyRow -> EmptyRow
+    P.ERowExtension label eTail -> Row (label, tUnit) $ effectRow eTail
+    P.EVar name -> Var name
+  recordRow = \case
+    P.REmptyRow -> EmptyRow
+    P.RRowExtension label t rTail -> Row (label, transformType effectName eparams t) $ recordRow rTail
+    P.RVar name -> Var name
+  scopeEffect = Row (effectName, transformedParams) EmptyRow
+  transformedParams =
+    if length eparams > 0
+      then Var "a"
+      else tUnit
 
 inferDecl :: [P.Decl] -> Either TypeError TypeEnv
-inferDecl ds =
-  let inferDecls decls = do
-        withEffects <- foldM addDeclToEnv prelude $ effects decls
-        foldM addDeclToEnv withEffects $ lets decls
-      infer_except = runExceptT (inferDecls ds)
-      initial_state = InferState {var = 0, row = 0, effect = 0}
+inferDecl dds = do
+  let isLet = \case
+        P.LetDecl{} -> True
+        _ -> False
+      isData = \case
+        P.DataDecl{} -> True
+        _ -> False
       isEffect = \case
-        P.EffectDecl {} -> True
+        P.EffectDecl{} -> True
         _ -> False
       effects = filter isEffect
-      lets = filter (not . isEffect)
-   in evalState infer_except initial_state
+      lets = filter isLet
+      datas = filter isData
+      inferDecls decls = do
+        let add env ds = foldM addDeclToEnv env ds
+        foldM add prelude [(datas decls), (effects decls), lets decls]
+      infer_except = runExceptT (inferDecls dds)
+      initial_state = InferState{var = 0, row = 0, effect = 0}
+
+  evalState infer_except initial_state
 
 addDeclToEnv :: TypeEnv -> P.Decl -> Infer TypeEnv
 addDeclToEnv env = \case
-    P.LetDecl name t expr -> do
-      (new_env, a) <- extend env name
-      (tExpr, eExpr, cExpr) <- infer new_env expr
-      let constraints = (Equals (a, tExpr)):cExpr
+  P.LetDecl name t expr -> do
+    (new_env, a) <- extend env name
+    (tExpr, eExpr, cExpr) <- infer new_env expr
+    let constraints = (Equals (a, tExpr)) : cExpr
 
-      let result = evalState (runExceptT $ solve constraints) IdSub
+    let result = evalState (runExceptT $ solve constraints) IdSub
 
-      sub <- case result of
-            Left err -> do
-              throwError $ UnificationError $ "Error unifying " ++ name ++ "\n" ++ prettyPrint expr ++ " :: " ++ show err
-            Right s -> return s
+    sub <- case result of
+      Left err -> do
+        throwError $ UnificationError $ "Error unifying " ++ name ++ "\n" ++ prettyPrint expr ++ " :: " ++ show err
+      Right s -> return s
 
-      let eExprGen = generalize . apply sub $ tExpr
 
-      -- when ("MyConsole" `isInfixOf` show result) $ do
-      --     let tester = generalize(apply sub $ Arrow (Var "v2") (Var "e6") tUnit)
-      --     Tr.traceM "\n---- Final ----\n"
-      --     Tr.traceM $ show tester
-      --     Tr.traceM "\n---- Sub ----\n"
-      --     Tr.traceM $ show sub
-      --     Tr.traceM "\n---- Before ----\n"
-      --     Tr.traceM $ show tExpr
-      --     Tr.traceM "\n---- Result ----\n"
-      --     Tr.traceM $ show eExprGen
+    let solved = apply sub tExpr
+    let eExprGen = generalize solved
 
-      let env' = extendVars new_env name eExprGen
+    -- when ("Nil" `isInfixOf` prettyPrint expr) $ do
+    --   Tr.traceM $ "\n"
+    --     ++ "\n CONSTRAINTS :: " ++ prettyPrintList constraints
+    --     ++ "\n TYPE :: " ++ prettyPrint tExpr
+    --     ++ "\n SUB :: " ++ show sub
+    --     ++ "\n Result :: " ++ show solved
+    --     ++ "\n\n"
 
-      return env'
-    P.EffectDecl name params ops -> do
-      let typedOps = map (\(n, t) -> (n, generalize $ transformType name params t )) ops
-      -- when (name == "MyConsole") $ do
-      --   Tr.traceM $ "\n"
-      --   Tr.traceM $ "\n" ++ show name ++ " : " ++ show ops
-      --   Tr.traceM $ "\n\n"
-      let info = EffectInfo {
-        effectInfoParams = params,
-        effectInfoOps = Map.fromList typedOps
-      }
-      let opVars = map (\(op, scheme) -> (name ++ "." ++ op, scheme)) typedOps
-      let new_env = foldr (\(n, scheme) env' -> extendVars env' n scheme) env opVars
-      return $ extendEffects new_env name info
-    P.DataDecl params name cstrs -> do
-      kind <- case length params of
-            0 -> do return KType
-            1 -> do return $ KArrow KType KType
-            _ -> throwError $ InferenceError "Not handling anything beyond * -> *"
 
-      -- Helpers to get Type inference Types (These need different names)
-      let mapTypes ts = map (transformType "" []) ts
-      let cstrTypes = map (\(cstrName, ts) -> (cstrName, mapTypes ts)) cstrs
+    -- when ("MyConsole" `isInfixOf` show result) $ do
+    --     let tester = generalize(apply sub $ Arrow (Var "v2") (Var "e6") tUnit)
+    --     Tr.traceM "\n---- Final ----\n"
+    --     Tr.traceM $ show tester
+    --     Tr.traceM "\n---- Sub ----\n"
+    --     Tr.traceM $ show sub
+    --     Tr.traceM "\n---- Before ----\n"
+    --     Tr.traceM $ show tExpr
+    --     Tr.traceM "\n---- Result ----\n"
+    --     Tr.traceM $ show eExprGen
 
-      when (name == "List" && False) $ do
-          Tr.traceM "\n\n"
-          Tr.traceM $ show cstrTypes ++ "\n\n"
+    let env' = extendVars new_env name eExprGen
 
-      -- This is describing the type on the level of kinds
-      let typeInfo = TypeInfo params kind
-      let typeCstr = foldr (\t acc -> TApp acc t) (TCon name) $ map Var params
-      -- Constructors here refer to data constructors (so taking terms to types)
-      -- The info has the type scheme of the constructors
-      -- For example: Nil for List a would have type forall a. List a. While Cons : forall a. a -> List a -> List a
-      let cstorInfo = map (\(cstorName, args) -> (cstorName, CtorInfo name $ createCstrInfo typeCstr args )) cstrTypes
-      when (name == "List" && False) $ do
-          Tr.traceM "\n\n"
-          Tr.traceM $ show cstorInfo ++ "\n\n"
+    return env'
+  P.EffectDecl name params ops -> do
+    let typedOps = map (\(n, t) -> (n, generalize $ transformType name params t)) ops
+    -- when (name == "MyConsole") $ do
+    --   Tr.traceM $ "\n"
+    --   Tr.traceM $ "\n" ++ show name ++ " : " ++ show ops
+    --   Tr.traceM $ "\n\n"
+    let info =
+          EffectInfo
+            { effectInfoParams = params
+            , effectInfoOps = Map.fromList typedOps
+            }
+    let opVars = map (\(op, scheme) -> (name ++ "." ++ op, scheme)) typedOps
+    let new_env = foldr (\(n, scheme) env' -> extendVars env' n scheme) env opVars
+    return $ extendEffects new_env name info
+  P.DataDecl params name cstrs -> do
+    kind <- case length params of
+      0 -> do return KType
+      1 -> do return $ KArrow KType KType
+      _ -> throwError $ InferenceError "Not handling anything beyond * -> *"
 
-      let new_env = env {
-        -- We add the kinding info about the type
-        envTypes = Map.insert name typeInfo (envTypes env),
-        -- The data constructors are added as terms.
-        envVars = foldr (\(cName, (CtorInfo _ b)) acc -> Map.insert cName b acc) (envVars env) cstorInfo,
-        -- The constructor metadata information is kept so we can identify the associated type
-        envCstors = foldr (\(cName, cInfo) acc -> Map.insert cName cInfo acc) (envCstors env) cstorInfo
-      }
+    -- Helpers to get Type inference Types (These need different names)
+    let mapTypes ts = map (transformType "" []) ts
+    let cstrTypes = map (\(cstrName, ts) -> (cstrName, mapTypes ts)) cstrs
 
-      return new_env
+    when (name == "List" && False) $ do
+      Tr.traceM "\n\n"
+      Tr.traceM $ show cstrTypes ++ "\n\n"
+
+    -- This is describing the type on the level of kinds
+    let typeInfo = TypeInfo params kind
+    let typeCstr = foldr (\t acc -> TApp acc t) (TCon name) $ map Var params
+    -- Constructors here refer to data constructors (so taking terms to types)
+    -- The info has the type scheme of the constructors
+    -- For example: Nil for List a would have type forall a. List a. While Cons : forall a. a -> List a -> List a
+    let cstorInfo = map (\(cstorName, args) -> (cstorName, CtorInfo name $ createCstrInfo typeCstr args)) cstrTypes
+    when (name == "List" && False) $ do
+      Tr.traceM "\n\n"
+      Tr.traceM $ show cstorInfo ++ "\n\n"
+
+    let new_env =
+          env
+            { -- We add the kinding info about the type
+              envTypes = Map.insert name typeInfo (envTypes env)
+            , -- The data constructors are added as terms.
+              envVars = foldr (\(cName, (CtorInfo _ b)) acc -> Map.insert cName b acc) (envVars env) cstorInfo
+            , -- The constructor metadata information is kept so we can identify the associated type
+              envCstors = foldr (\(cName, cInfo) acc -> Map.insert cName cInfo acc) (envCstors env) cstorInfo
+            }
+
+    return new_env
 
 createCstrInfo :: Type -> [Type] -> Scheme
 createCstrInfo cstredType ts = generalize $ foldr (\tp a -> Arrow tp EmptyRow a) cstredType ts
@@ -392,8 +399,8 @@ toHead r l = case r of
         if nextLabel == l
           then Row (nextLabel, nextType) (Row (label, t) rowTail)
           else Row (nextLabel, nextType) newTail
-    where
-      newTail = toHead (Row (label, t) rowTail) l
+   where
+    newTail = toHead (Row (label, t) rowTail) l
   _ -> r
 
 instance Eq Type where
@@ -408,10 +415,10 @@ instance Eq Type where
   (==) (TApp a b) (TApp c d) = a == c && b == d
   (==) (TCon n1) (TCon n2) = n1 == n2
   (==) (Var _) _ = False
-  (==) (Arrow {}) _ = False
+  (==) (Arrow{}) _ = False
   (==) (Record _) _ = False
   (==) EmptyRow _ = False
-  (==) (TCon {}) _ = False
+  (==) (TCon{}) _ = False
   (==) (TApp _ _) _ = False
 
 instance Report Type where
@@ -424,16 +431,16 @@ instance Report Type where
       EmptyRow -> ""
       TApp a b -> prettyPrint a ++ " " ++ prettyPrint b
       Row (l, lt) rtail -> l ++ label_type ++ separator ++ " " ++ prettyPrint rtail
-         where
-          label_type = if lt /= tUnit
-              then " : " ++ prettyPrint lt
-              else ""
-          separator = case rtail of
-            EmptyRow -> ""
-            Var v -> v
-            Row {} -> ","
-            _ -> "ERROR"
-
+       where
+        label_type =
+          if lt /= tUnit
+            then " : " ++ prettyPrint lt
+            else ""
+        separator = case rtail of
+          EmptyRow -> ""
+          Var v -> v
+          Row{} -> ","
+          _ -> "ERROR"
 
 -- instance Report Scheme where
 --   prettyPrint (Forall vars t) = "forall " ++ show vars ++ " . " ++ prettyPrint t
@@ -454,8 +461,9 @@ data Constraint
   | Merge Type Type Type
   deriving (Show, Eq)
 
--- | A substitution.
--- - We make this a Monoid to more easily handling [Substitution] -> Substituion through composing Substitutions
+{- | A substitution.
+- We make this a Monoid to more easily handling [Substitution] -> Substituion through composing Substitutions
+-}
 data Substitution = IdSub | Single (Type, Type) | Composed [(Type, Type)]
   deriving (Show, Eq)
 
@@ -471,20 +479,19 @@ instance Semigroup Substitution where
 instance Monoid Substitution where
   mempty = IdSub
 
-
 extend :: TypeEnv -> String -> Infer (TypeEnv, Type)
 extend env name = do
   v <- fresh TVar >>= newvar
---  e <- fresh EVar >>= newvar
+  --  e <- fresh EVar >>= newvar
 
   let new_env = Map.insert name (Forall Set.empty v) (envVars env)
 
-  return (env { envVars = new_env },  v)
+  return (env{envVars = new_env}, v)
 
 data InferState = InferState
-  { var :: Int,
-    row :: Int,
-    effect :: Int
+  { var :: Int
+  , row :: Int
+  , effect :: Int
   }
 
 --
@@ -497,8 +504,8 @@ type Unify a = ExceptT TypeError (State Substitution) a
 -- | Run an inference computation with a starting state for fresh vars
 runInfer :: Infer a -> Int -> Int -> Either TypeError a
 runInfer m v r = evalState (runExceptT m) inferState
-  where
-    inferState = InferState {var = v, row = r, effect = 0}
+ where
+  inferState = InferState{var = v, row = r, effect = 0}
 
 puts :: (MonadState s m) => (s -> p -> s) -> p -> m ()
 puts setter value = modify (`setter` value)
@@ -508,9 +515,9 @@ data UnificationVariable = TVar | RVar | EVar
 fresh :: UnificationVariable -> Infer String
 fresh varType = do
   let setV s v = case varType of
-        TVar -> s { var = v }
-        RVar -> s { row = v }
-        EVar -> s { effect = v }
+        TVar -> s{var = v}
+        RVar -> s{row = v}
+        EVar -> s{effect = v}
 
   let getter = case varType of
         TVar -> var
@@ -525,12 +532,11 @@ fresh varType = do
   let nextVar = do
         n <- gets getter >>= \a -> return $ a + 1
         _ <- puts setV n
-        return  n
+        return n
 
   n <- nextVar
 
   return $ prefix ++ show n
-
 
 freeVars :: Type -> Set String
 freeVars t = case t of
@@ -542,11 +548,8 @@ freeVars t = case t of
   EmptyRow -> Set.empty
   TApp t1 t2 -> Set.union (freeVars t1) (freeVars t2)
 
-newvar :: Monad m => String -> m Type
-
+newvar :: (Monad m) => String -> m Type
 newvar s = return $ Var s
-
-
 
 -- The return here is (Type, Effect, Constraints)
 infer :: TypeEnv -> P.Expr -> Infer (Type, Type, [Constraint])
@@ -567,7 +570,6 @@ infer env = \case
     t <- instantiate assoc_t
     e <- fresh EVar >>= newvar
     return (t, e, [])
-
   Expr.Lambda var_name _ expr -> do
     {-
       Г |- x : T1   Г |- e : T2
@@ -578,7 +580,6 @@ infer env = \case
     (t, e, cst) <- infer new_env expr
     e' <- fresh EVar >>= newvar
     return (Arrow u e t, e', cst)
-
   Expr.App e1 e2 -> do
     {-
       Г |- e1 : T1 -> T   Г |- e2 : T1
@@ -590,8 +591,15 @@ infer env = \case
 
     (t_e1, fe, cs_e1) <- infer env e1
     (t_e2, arg_e, cs_e2) <- infer env e2
+
+
     let t = Arrow t_e2 fresh_e fresh_t
     let constraints = cs_e1 ++ cs_e2 ++ [Equals (t_e1, t), Equals (fresh_e, fe), Equals (fresh_e, arg_e)]
+
+    -- when ("Cons" `isInfixOf` (prettyPrint e1)) $ do
+    --   Tr.traceM $ "\n\n " ++ prettyPrint (Expr.App e1 e2)
+    --   Tr.traceM $ "\n e1 :: " ++ show t_e1 ++ "\n e2 :: " ++ show t_e2 ++ "\n"
+    --   Tr.traceM $ prettyPrintList constraints
 
     -- when ("MyConsole" `isInfixOf` show e1) $ do
     --   let remainingWidth value minL = if length value < minL
@@ -614,10 +622,10 @@ infer env = \case
   Expr.Lit x -> do
     fresh_t <- fresh EVar >>= newvar
     return $ case x of
-        P.LitInt _ -> (tInt, fresh_t, [])
-        P.LitBool _ -> (tBool, fresh_t, [])
-        P.LitString _ -> (tString, fresh_t, [])
-        P.LitUnit -> (tUnit, fresh_t, [])
+      P.LitInt _ -> (tInt, fresh_t, [])
+      P.LitBool _ -> (tBool, fresh_t, [])
+      P.LitString _ -> (tString, fresh_t, [])
+      P.LitUnit -> (tUnit, fresh_t, [])
   Expr.Let var_name assign body -> do
     {-
       Г |- [x -> e1]e2 : T    Г |- e1 : T1
@@ -643,7 +651,6 @@ infer env = \case
     --      The paper outlines an Open / Close type operation that may be useful to consider for simplifying types
     --        This effectively makes all total functions able to be "opened" to accept any thing
     --
-
 
     let result = evalState (runExceptT $ solve assign_cs) IdSub
 
@@ -678,12 +685,11 @@ infer env = \case
 
     -- TODO: I think that this effectively overwrites the extension of var_name set to a
     -- add the type scheme to the environment
-    let env' = new_env { envVars = Map.insert var_name assign_t_gen (envVars new_env) }
+    let env' = new_env{envVars = Map.insert var_name assign_t_gen (envVars new_env)}
     -- generate type and constraints for body
     (body_t, body_e, body_cs) <- infer env' body
     assign_t_i <- instantiate assign_t_gen
-    let constraints = body_cs ++ assign_cs ++ [Equals (a, assign_t_i), Equals(e_result, body_e), Equals(e_result, assign_e)]
-
+    let constraints = body_cs ++ assign_cs ++ [Equals (a, assign_t_i), Equals (e_result, body_e), Equals (e_result, assign_e)]
 
     return (body_t, e_result, constraints)
   Expr.If cond tr fl -> do
@@ -707,18 +713,17 @@ infer env = \case
     -- we are assuming here that our built in binary operations are more or less total and can be used in any
     -- effect context
 
-    let eCst = [ Equals (l_e, result_e), Equals (r_e, result_e)]
+    let eCst = [Equals (l_e, result_e), Equals (r_e, result_e)]
 
     let int_cs = (tInt, result_e, [Equals (l_t, tInt), Equals (r_t, tInt)] ++ eCst)
     let bool_cs = (tBool, result_e, [Equals (l_t, tBool), Equals (r_t, tBool)] ++ eCst)
-    --return (binT, l_e, c)
+    -- return (binT, l_e, c)
 
     return $ case op of
       P.Add -> int_cs
       P.Subtract -> int_cs
       P.And -> bool_cs
       P.Or -> bool_cs
-
   Expr.Record (RecordExpr.RecordCstr assignments) -> do
     let do_infer (l, e) = do
           result <- infer env e
@@ -754,7 +759,6 @@ infer env = \case
       OUTPUT : T, p
     -}
 
-
     (base_t, base_e, cl) <- infer env base
     freshRow <- fresh RVar >>= newvar
     (ext_t, ext_e, cr) <- infer env ext
@@ -764,9 +768,8 @@ infer env = \case
 
     -- In more general systems this would generate a Lacks l p constraint
     -- With microsofts results we have a simplified inference since we allow "scoped" labels
-    return (result_t, ext_e, cl ++ cr ++ [Equals (expected_t, base_t), Equals (base_e, ext_e) ])
-
-  Expr.Perform effect op arg  -> do
+    return (result_t, ext_e, cl ++ cr ++ [Equals (expected_t, base_t), Equals (base_e, ext_e)])
+  Expr.Perform effect op arg -> do
     {-
         Σ |- E  ? I think this is really just application...
     ────────────────────────────────────────────────────  [ PERFORM ]
@@ -787,34 +790,34 @@ infer env = \case
     --       Nothing -> throwError $ InferenceError $ "Could not find op " ++ op
     --       Just s -> instantiate s
 
-    return (t, e_result, (Equals(e, e_result):cs))
+    return (t, e_result, (Equals (e, e_result) : cs))
 
-     -- opType <- instantiate (effectInfoOps effectInfo ! op)
+  -- opType <- instantiate (effectInfoOps effectInfo ! op)
 
-     -- fresh_t <- fresh TVar >>= newvar
-     -- fresh_e <- fresh EVar >>= newvar
-     -- -- At this point we are just throwing an error if there is no effect info
+  -- fresh_t <- fresh TVar >>= newvar
+  -- fresh_e <- fresh EVar >>= newvar
+  -- -- At this point we are just throwing an error if there is no effect info
 
-     -- (tArg, eArg, cArg) <- infer env arg
+  -- (tArg, eArg, cArg) <- infer env arg
 
-     -- let t = Arrow tArg fresh_e fresh_t
+  -- let t = Arrow tArg fresh_e fresh_t
 
-     -- -- I think this needs to be something like
-     -- -- (tArg, eArg, cArg) <- infer env arg
-     -- -- We need a constraint here that says opType = tArg -> {fresh_e} fresh_t?
-     -- -- effect on the arrow, args, resulting effect, all need to be the same?
-     -- -- I think perform is just a special application?
+  -- -- I think this needs to be something like
+  -- -- (tArg, eArg, cArg) <- infer env arg
+  -- -- We need a constraint here that says opType = tArg -> {fresh_e} fresh_t?
+  -- -- effect on the arrow, args, resulting effect, all need to be the same?
+  -- -- I think perform is just a special application?
 
-     -- eTail <- fresh EVar >>= newvar
+  -- eTail <- fresh EVar >>= newvar
 
-     -- let effect_t = Row (effect, tUnit) eTail
-     -- let effect_c = [
-     --         Equals (t, opType),-- opType should be a functin type
-     --         Equals (fresh_e, eArg), -- Effect of the args matches fresh, which will match effect of opType based on how we construct t
-     --         Equals (fresh_e, effect_t) -- This is the resulting effect
-     --       ]
+  -- let effect_t = Row (effect, tUnit) eTail
+  -- let effect_c = [
+  --         Equals (t, opType),-- opType should be a functin type
+  --         Equals (fresh_e, eArg), -- Effect of the args matches fresh, which will match effect of opType based on how we construct t
+  --         Equals (fresh_e, effect_t) -- This is the resulting effect
+  --       ]
 
-     -- return (fresh_t, effect_t, cArg ++ effect_c)
+  -- return (fresh_t, effect_t, cArg ++ effect_c)
   Expr.Handle expr hdlr -> do
     {-
         Γ ⊢ e : A ! (| Op | E |)                                                    -- the expresion is of type A with effect rows containng Op
@@ -838,102 +841,93 @@ infer env = \case
     (env', retVarT) <- extend env retVar
     (retT, retE, retC) <- infer env' retExpr
 
-    let return_constraints = (Equals (retVarT, bodyT)):retC -- type of x is Int
+    let return_constraints = (Equals (retVarT, bodyT)) : retC -- type of x is Int
 
-    --let aaa = envEffects env
-    --let info = aaa ! "MyState"
-    --let ops = effectInfoOps info
-    --let getS = ops ! "get"
+    -- let aaa = envEffects env
+    -- let info = aaa ! "MyState"
+    -- let ops = effectInfoOps info
+    -- let getS = ops ! "get"
 
     ---- Need to generate constraints for the arguments and return type based on the schema for handler operations
     ---- Ex: get : () -> a  Needs to be instantiated with a type variable va
 
-
-
     opsC <- getOpConstraints env (Map.elems $ P.opClause hdlr)
 
-    let type_constraints = foldr (++) [] $ map (\(t,e,cs) -> cs ++ [Equals (t, resultT), Equals(e, hdlrRest)]) opsC
+    let type_constraints = foldr (++) [] $ map (\(t, e, cs) -> cs ++ [Equals (t, resultT), Equals (e, hdlrRest)]) opsC
     let effect_constraints = []
 
     return (resultT, hdlrRest, bodyC ++ return_constraints ++ type_constraints ++ effect_constraints ++ [Equals (retT, resultT), Equals (retE, hdlrRest)])
 
-prettyPrintList :: Show a => [a] -> String
+prettyPrintList :: (Show a) => [a] -> String
 prettyPrintList xs = foldr (\x agg -> agg ++ "\n\t," ++ show x) "[" xs
 
 getOpConstraints :: TypeEnv -> [P.OpClause] -> Infer [(Type, Type, [Constraint])]
 getOpConstraints _ [] = return []
-getOpConstraints env (c:cs) = do
-    x <- getClauseConstraints env c
-    xs <- getOpConstraints env cs
+getOpConstraints env (c : cs) = do
+  x <- getClauseConstraints env c
+  xs <- getOpConstraints env cs
 
-    return $ x:xs
+  return $ x : xs
 
 getClauseConstraints :: TypeEnv -> P.OpClause -> Infer (Type, Type, [Constraint])
 getClauseConstraints env (P.OpClause args k body) = do
-    argT <- fresh TVar >>= newvar
-    resT <- fresh TVar >>= newvar
-    effect <- fresh EVar >>= newvar
-    let kT = Arrow argT effect resT
+  argT <- fresh TVar >>= newvar
+  resT <- fresh TVar >>= newvar
+  effect <- fresh EVar >>= newvar
+  let kT = Arrow argT effect resT
 
-    let extendMany envv ps = case ps of
-          ((n, t): xs) -> extendMany (extendVars envv n (Forall Set.empty t)) xs
-          [] -> envv
+  let extendMany envv ps = case ps of
+        ((n, t) : xs) -> extendMany (extendVars envv n (Forall Set.empty t)) xs
+        [] -> envv
 
-    argsT <- mapM (\s -> (s,) <$> (fresh TVar >>= newvar)) args
+  argsT <- mapM (\s -> (s,) <$> (fresh TVar >>= newvar)) args
 
+  let env' = extendMany env ((k, kT) : argsT)
 
-    let env' = extendMany env ((k, kT):argsT)
+  infer env' body
 
-    infer env' body
+{-
+Γ ⊢ e : A ! {Op} ∪ E
+Γ, x:A ⊢ e_ret : C ! E
+Γ, x:T_in, k:(T_out → C ! E) ⊢ e_op : C ! E
+─────────────────────────────────────────────
+Γ ⊢ with e { return x→e_ret, Op(x,k)→e_op } : C ! E
 
-    {-
-  Γ ⊢ e : A ! {Op} ∪ E
-  Γ, x:A ⊢ e_ret : C ! E
-  Γ, x:T_in, k:(T_out → C ! E) ⊢ e_op : C ! E
-  ─────────────────────────────────────────────
-  Γ ⊢ with e { return x→e_ret, Op(x,k)→e_op } : C ! E
+output: C and E
+input: e, ops...
 
-  output: C and E
-  input: e, ops...
+fresh return_type -- The output of the handler needs to be consistent across op clauses.
 
-  fresh return_type -- The output of the handler needs to be consistent across op clauses.
+infer e -> A ! <r1> (r is an effect row variable)
+    constraint r1 = <Op | r2>
 
-  infer e -> A ! <r1> (r is an effect row variable)
-      constraint r1 = <Op | r2>
+infer return_body -> C ! a
+    constraint return_type = C
+    constraint a = r2
 
-  infer return_body -> C ! a
-      constraint return_type = C
-      constraint a = r2
+for each op clause
+  1. find it's definition's type : ex: get : () -> a
+  2. infer each arg x and constrain the type to be = the positional param type from the defintion?
+  3. infer the continuation type, constrain to be a function a -> return_type ! r2
+   -}
 
-  for each op clause
-    1. find it's definition's type : ex: get : () -> a
-    2. infer each arg x and constrain the type to be = the positional param type from the defintion?
-    3. infer the continuation type, constrain to be a function a -> return_type ! r2
-     -}
+-- for each operation clause
+--    the type of the args match that of the effect operation
+--    the type of the continuation is a function k: OutputOfOperation -> output of handler?
+--    The body must have the handler's result type C
 
-
-
-    -- for each operation clause
-    --    the type of the args match that of the effect operation
-    --    the type of the continuation is a function k: OutputOfOperation -> output of handler?
-    --    The body must have the handler's result type C
-
-
-
-    -- Need to look at the OpClauses in b to get the effects
-    -- b is essentially a special arrow type except it is removing things..?
-    -- This should remove the effect that is being handled.
-
-
+-- Need to look at the OpClauses in b to get the effects
+-- b is essentially a special arrow type except it is removing things..?
+-- This should remove the effect that is being handled.
 
 generalize :: Type -> Scheme
 generalize t = Forall vars closed_t
-  where
-    closed_t = closeType t
-    vars = case t of
-      Arrow {} -> freeVars closed_t
-      TApp t1 t2 -> Set.union (freeVars t1) (freeVars t2)
-      _ -> Set.empty
+ where
+  closed_t = closeType t
+  vars = case t of
+    Arrow{} -> freeVars closed_t
+    TApp t1 t2 -> Set.union (freeVars t1) (freeVars t2)
+    _ -> Set.empty
 
 -- TODO (kc): This needs some tests.
 apply :: Substitution -> Type -> Type
@@ -942,24 +936,26 @@ apply sub t = case sub of
   Composed [] -> t
   Single (a, b) -> applyToType (a, b) t
   Composed cs -> foldr applyToType t cs
-  where
-    applyToType (a, b) typ
-      | typ == a = b
-      | otherwise = case typ of
-          Arrow t1 e t2 -> Arrow (applyToType (a, b) t1) (applyToType (a, b) e) (applyToType (a, b) t2)
-          Record r -> Record (applyToType (a, b) r)
-          Row (l, lt) r' -> Row (l, applyToType (a, b) lt) (applyToType (a,b) r')
-          _ -> typ
+ where
+  applyToType (a, b) typ
+    | typ == a = b
+    | otherwise = case typ of
+        Arrow t1 e t2 -> Arrow (applyToType (a, b) t1) (applyToType (a, b) e) (applyToType (a, b) t2)
+        Record r -> Record (applyToType (a, b) r)
+        Row (l, lt) r' -> Row (l, applyToType (a, b) lt) (applyToType (a, b) r')
+        TApp tf ta -> TApp (applyToType (a, b) tf) (applyToType (a, b) ta)
+        _ -> typ
 
 -- TODO (kc): Needs to change to provide some sort of LetDecl -> Type map?
 inferType :: P.Expr -> Either TypeError (Type, Type)
 inferType expr =
   let env = prelude -- initialEnv
       infer_except = runExceptT (infer env expr)
-      initial_state = InferState {var = 0, row = 0, effect = 0}
+      initial_state = InferState{var = 0, row = 0, effect = 0}
    in case evalState infer_except initial_state of
         Left err -> Left err
-        Right (t, e, cs) -> -- TODO : Does the e need to be thrown through the substitutions and returned?
+        Right (t, e, cs) ->
+          -- TODO : Does the e need to be thrown through the substitutions and returned?
           let except = runExceptT (solve cs)
               result = evalState except IdSub
            in case result of
@@ -977,16 +973,17 @@ inferType expr =
 --- This maps t1 to t2 for some constraint c
 (-->) :: Type -> Type -> Constraint -> Constraint
 (-->) t1 t2 constraint = case constraint of
-    (Equals (ta, tb)) -> Equals (substitute ta, substitute tb)
-    (Merge r1 r2 r3) -> Merge (substitute r1) (substitute r2) (substitute r3)
-  where
-    substitute typ
-      | typ == t1 = t2
-      | otherwise = case typ of
-          Arrow a e b -> Arrow (substitute a) (substitute e) (substitute b)
-          Row (l, t) r' -> Row (l, substitute t) (substitute r')
-          Record a -> Record $ substitute a
-          _ -> typ
+  (Equals (ta, tb)) -> Equals (substitute ta, substitute tb)
+  (Merge r1 r2 r3) -> Merge (substitute r1) (substitute r2) (substitute r3)
+ where
+  substitute typ
+    | typ == t1 = t2
+    | otherwise = case typ of
+        Arrow a e b -> Arrow (substitute a) (substitute e) (substitute b)
+        Row (l, t) r' -> Row (l, substitute t) (substitute r')
+        Record a -> Record $ substitute a
+        TApp a b -> TApp (substitute a) (substitute b)
+        _ -> typ
 
 --- Applies t1 --> t2 over a list of constraints
 (->>) :: Type -> Type -> [Constraint] -> [Constraint]
@@ -1007,28 +1004,30 @@ solve (c : cs) =
             | n `notElem` freeVars t ->
                 solve (t2 ->> t1 $ cs) >>= \s -> return $ s <> Single (t2, t1)
           (Arrow t11 e1 t12, Arrow t21 e2 t22) -> solve $ cs ++ [Equals (t11, t21), Equals (t12, t22), Equals (e1, e2)]
-          (Record a, Record b) -> solve (Equals (a, b):cs)
-          --(Record (Var p), Record r) -> solve (Equals (Var p, r) : cs)
-          --(Record r, Record (Var p)) -> solve (Equals (Var p, r) : cs)
+          (Record a, Record b) -> solve (Equals (a, b) : cs)
           (Row (l, t) r, row) -> case toHead row l of
-                Row (_, t') r' -> solve $ cs ++ [Equals (t, t'), Equals(r, r')]
-                _ -> throwError $ InferenceError $ "Could not unify rows: " ++ prettyPrint t1 ++ " and " ++ prettyPrint t2
+            Row (_, t') r' -> solve $ cs ++ [Equals (t, t'), Equals (r, r')]
+            _ -> throwError $ InferenceError $ "Could not unify rows: " ++ prettyPrint t1 ++ " and " ++ prettyPrint t2
+          (TApp a1 a2, TApp b1 b2) |
+            a1 == b1 -> solve $ cs ++ [Equals (a2, b2)]
           _ -> throwError $ InferenceError $ "Could not unify " ++ prettyPrint t1 ++ " and " ++ prettyPrint t2
-    Merge rLeft rRight rFinal -> do
-        -- We need to deal with the merge constraint after other constraints
-        -- This is mainly since if rLeft and rRight are variables then we need to solve them first
-        s <- solve cs
-        let
-          rLeftT = apply s rLeft
-          rRightT = apply s rRight
 
-        if rLeftT == EmptyRow
-          then solve $ cs ++ [Equals (rFinal, rRightT)]
-        else if rRightT == EmptyRow
-          then solve $ cs ++ [Equals (rFinal, rLeftT)]
-        else case mergeRow rLeftT rRightT of
-          Left err -> throwError err
-          Right merged -> solve $ cs ++ [Equals (rFinal, merged)]
+    Merge rLeft rRight rFinal -> do
+      -- We need to deal with the merge constraint after other constraints
+      -- This is mainly since if rLeft and rRight are variables then we need to solve them first
+      s <- solve cs
+      let
+        rLeftT = apply s rLeft
+        rRightT = apply s rRight
+
+      if rLeftT == EmptyRow
+        then solve $ cs ++ [Equals (rFinal, rRightT)]
+        else
+          if rRightT == EmptyRow
+            then solve $ cs ++ [Equals (rFinal, rLeftT)]
+            else case mergeRow rLeftT rRightT of
+              Left err -> throwError err
+              Right merged -> solve $ cs ++ [Equals (rFinal, merged)]
 
 mergeRow :: Type -> Type -> Either TypeError Type
 mergeRow r1 r2 = case (r1, r2) of
@@ -1058,7 +1057,6 @@ instantiate (Forall vars base) = do
   new_vars <- getFreshVarMap vars
 
   let vs = map (bimap Var Var) $ Map.toList new_vars
-
   let instantiated = apply (Composed vs) base
 
   openType instantiated
@@ -1078,5 +1076,3 @@ closeType = \case
   Arrow t1 e t2 -> Arrow t1 (closeType e) t2
   -- Record r -> Record $ closeType r
   t -> t
-
-
