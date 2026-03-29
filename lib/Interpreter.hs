@@ -1,12 +1,12 @@
-module Interpreter (eval, evalDecls, evalExpr, Env(..), EvaluationError, Value (..), fromDecl) where
+module Interpreter (eval, evalDecls, evalExpr, Env (..), EvaluationError, Value (..), fromDecl) where
 
 import Control.Monad (ap, when, (>=>))
+import Control.Monad.Error.Class (MonadError (throwError))
 import Data.Char (toLower)
 import Data.Map (Map, (!), (!?))
 import Data.Map qualified as Map
 import Debug.Trace qualified as Tr
 import Parser
-import Control.Monad.Error.Class (MonadError(throwError))
 
 enableTrace :: Bool
 enableTrace = False
@@ -48,10 +48,8 @@ instance Eq Value where
   RRecord rs == RRecord rs' = rs == rs'
   RVariant n vs == RVariant n' vs' = n == n' && vs == vs'
   _ == _ = False
+
 ---  REffClosure f == REffClosure g = False
-
-
-
 
 instance Show Value where
   show = \case
@@ -59,8 +57,8 @@ instance Show Value where
     RUnit -> "()"
     RRecord [] -> "{}"
     RRecord lbls -> "{ " ++ foldr1 (\lbl acc -> lbl ++ ", " ++ acc) labels ++ " }"
-      where
-        labels = map (\(l, v) -> l ++ ": " ++ show v) lbls
+     where
+      labels = map (\(l, v) -> l ++ ": " ++ show v) lbls
     RInt v -> show v
     RBool v -> show v
     RString v -> v
@@ -97,22 +95,21 @@ data Env = Env
   }
 
 emptyEnv :: Env
-emptyEnv = Env { envValues = Map.empty, envDecl = Map.empty }
+emptyEnv = Env{envValues = Map.empty, envDecl = Map.empty}
 
 fromDecl :: [Decl] -> Env
 fromDecl ds =
-    let
-      _fromDecl ((LetDecl name _ expr):decls) env = _fromDecl decls (env { envDecl = Map.insert name expr ( envDecl env)} )
-      _fromDecl ((DataDecl _ _typeName z):decls) env =  _fromDecl decls ( env { envValues = newValues z })
-          where
-            newValues cstrs = foldr (\(name, hs) environ -> Map.insert name (build_function name hs []) environ) (envValues env) cstrs
-            build_function dataCstr (_:xs) finalArgs = REffClosure (\x -> Done $ build_function dataCstr xs (x:finalArgs))
-            build_function dataCstr [] finalArgs = RVariant dataCstr (reverse finalArgs)
-      _fromDecl (_:xs) env = _fromDecl xs env
-      _fromDecl [] env = env
-    in
-      _fromDecl ds emptyEnv
-
+  let
+    _fromDecl ((LetDecl name _ expr) : decls) env = _fromDecl decls (env{envDecl = Map.insert name expr (envDecl env)})
+    _fromDecl ((DataDecl _ _typeName z) : decls) env = _fromDecl decls (env{envValues = newValues z})
+     where
+      newValues cstrs = foldr (\(name, hs) environ -> Map.insert name (build_function name hs []) environ) (envValues env) cstrs
+      build_function dataCstr (_ : xs) finalArgs = REffClosure (\x -> Done $ build_function dataCstr xs (x : finalArgs))
+      build_function dataCstr [] finalArgs = RVariant dataCstr (reverse finalArgs)
+    _fromDecl (_ : xs) env = _fromDecl xs env
+    _fromDecl [] env = env
+   in
+    _fromDecl ds emptyEnv
 
 data EvaluationError
   = Error String
@@ -122,80 +119,30 @@ data EvaluationError
 evalExpr :: Expr -> Either EvaluationError Value
 evalExpr expr = case s of
   Done v -> Right v
-  Perform' {} -> Left $ Error "Missing handler?"
+  Perform'{} -> Left $ Error "Missing handler?"
   Err err -> Left $ Error err
-  where
-    s = eval emptyEnv expr
+ where
+  s = eval emptyEnv expr
 
 evalDecls :: [Decl] -> Either EvaluationError Value
 evalDecls decls = case evalMain of
-      Done v -> Right v
-      Perform' {} -> Left $ Error "Missing handler?"
-      Err err -> Left $ Error err
-    where
-      evalMain = case findMain decls of
-            Nothing -> Err $ "Missing main function"
-            Just mainExpr -> eval initialEnv $ tryExecute mainExpr
-      initialEnv = fromDecl decls
-      findMain ((LetDecl name _ expr):xs) =
-          if map toLower name == "main"
-            then Just expr
-            else findMain xs
-      findMain (_:xs) = findMain xs
-      findMain [] = Nothing
-      tryExecute expr = case expr of
-            Lambda {} -> App expr $ Lit LitUnit
-            _ -> expr
-
-
--- evalDecl :: Env -> Decl -> Either EvaluationError Value
--- evalDecl env decl =
-  {- Our type environment has:
-   -  1. Type declarations
-   -  2. Effect Declarations
-   -  3. Let Declarations (expressions to be evaluated)
-   -
-   - We are only really concerned about the let declarations
-   - right now, Effects essentially have some names?
-   - So this needs to be kind of like Type inference,
-   - Env will need to have a map of name -> Value?
-   -
-   - Ex:
-   -
-   - let x = 2 => x := RInt 2  -- Constants
-   - let id = \x -> x =>  id := RFunc "x" (Var x) <env>
-   -
-   - Problem: How do we construct the environment here?
-   -
-   - let main = \_ -> thing 2 + luckyNumber
-   -
-   - let thing = \x -> luckyNum + x
-   - let luckyNumber = 42
-   -
-   - 1. The let decl -> (name, expr)
-   - 2. Create a dag where n1 < n2 iff n1 \in freeVars e2?`
-   - 3. This won't work for recursion (cycles).
-   -
-   - 1. Process main()
-   - 2. evaluate thing 2
-   -    - look up thing
-   -      - doesn't exist in values
-   -        - evaluate thing
-   -          - lookup luckyNumber
-   -            - doesn't exist in values
-   -              - decl <- getDecl "luckyNumber"
-   -              - evalDecl decl
-   -
-   -                - eval env luckyNumberDecl >-> env
-   -              - env["luckyNumber"] := RInt 42
-   -            - return $ env.lookup["luckyNumber"]
-   -          - Add
-
-   -
-   -
-   -}
-
-
+  Done v -> Right v
+  Perform'{} -> Left $ Error "Missing handler?" -- TODO (kc): Rename this
+  Err err -> Left $ Error err
+ where
+  evalMain = case findMain decls of
+    Nothing -> Err $ "Missing main function"
+    Just mainExpr -> eval initialEnv $ tryExecute mainExpr
+  initialEnv = fromDecl decls
+  findMain ((LetDecl name _ expr) : xs) =
+    if map toLower name == "main"
+      then Just expr
+      else findMain xs
+  findMain (_ : xs) = findMain xs
+  findMain [] = Nothing
+  tryExecute expr = case expr of
+    Lambda{} -> App expr $ Lit LitUnit
+    _ -> expr
 
 --- Evaluates an expression through term substitutions
 eval :: Env -> Expr -> Eval Value
@@ -258,11 +205,9 @@ eval env (App f arg) = do
             eval (bind name arg_v env') body
           REffClosure k -> do
             k arg_v
-
           _ -> Err $ "Can not apply " ++ show f_value ++ " to " ++ show arg_v
 
   get_return_action
-
 eval env (Record (RecordCstr ls)) = do
   let eval_map (l, e) = do
         expr <- eval env e
@@ -288,6 +233,13 @@ eval env (Record (RecordAccess e b)) = do
         Just v -> return v
     _ -> Err "Accessing Records"
 eval env (Case expr match_arms) = do
+  {-
+   This is a flat implementation of pattern matching.
+   It only does type constructors currently.
+
+   Eventually we would want to consider the compilation of decision trees as described in Marnget's paper or Jules Jones'
+   notes.
+   -}
   -- 1. Evaluate the matcher
   matcher <- eval env expr
 
@@ -297,36 +249,26 @@ eval env (Case expr match_arms) = do
               _ -> False
 
         case filter isMatchArm match_arms of
-            x:_ -> Just x
-            [] -> Nothing
+          x : _ -> Just x
+          [] -> Nothing
 
-  let extendVars name value environ = environ { envValues = Map.insert name value (envValues environ) }
-
+  let extendVars (name, value) environ = environ{envValues = Map.insert name value (envValues environ)}
 
   -- 2. Find the vars and expression for the arm that matches our variant
   (vars, caseExpr) <- case matchArm of
-        Just (CaseArm _ vars caseExpr) -> Done (vars, caseExpr)
-        Nothing -> Err $ "Could not find a match arm for " ++ show matchArm
+    Just (CaseArm _ vars caseExpr) -> Done (vars, caseExpr)
+    Nothing -> Err $ "Could not find a match arm for " ++ show matchArm
 
   -- 3. Now we need to setup the context based on the variables being matched
   newEnv <- case matcher of
-      RVariant _ values -> Done $ foldr (\(name, value) environ -> extendVars name value environ) env $ zip vars values
-      _ -> Err "Case expression not a variant"
+    RVariant _ values -> Done $ foldr (\kvp environ -> extendVars kvp environ) env $ zip vars values
+    _ -> Err "Case expression not a variant"
 
   -- 4. Then evaluate the right side of the case arm with the new context
 
   value <- eval newEnv caseExpr
 
-
-  -- We need to find the matching arm ...
-  -- let getMatchArm matcher = do
-  --
-  -- let app = foldl P.App (P.Var cstrName) $ map P.Var names
-
   return value
-
-
-
 eval env (Perform eff op expr) = do
   v <- eval env expr
   Perform' eff op [v] pure
@@ -347,7 +289,7 @@ intercept env hdlr (Perform' eff op params k) =
 intercept _ _ err = err
 
 bind :: String -> Value -> Env -> Env
-bind k v env = env { envValues = Map.insert k v (envValues env) }
+bind k v env = env{envValues = Map.insert k v (envValues env)}
 
 bindMany :: [String] -> [Value] -> Env -> Env
 bindMany keys values m = foldr (\(k, v) acc -> bind k v acc) m (zip keys values)

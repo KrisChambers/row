@@ -353,7 +353,7 @@ addDeclToEnv env = \case
     kind <- case length params of
       0 -> do return KType
       1 -> do return $ KArrow KType KType
-      _ -> throwError $ InferenceError "Not handling anything beyond * -> *"
+      _ -> throwError $ InferenceError "Not handling higher kinded types"
 
     -- Helpers to get Type inference Types (These need different names)
     let mapTypes ts = map (transformType "" []) ts
@@ -857,16 +857,6 @@ getCaseEnv :: TypeEnv -> P.CaseArm -> Infer ((Type, Type), Type, [Constraint])
 getCaseEnv env (P.CaseArm cstrName names branch) = do
   tCaseArm <- fresh TVar >>= newvar
   eCaseArm <- fresh EVar >>= newvar
-
-  -- Imitating infer Var (cstrName)
-  scheme <- case lookupType env cstrName of
-    Just s -> return s
-    Nothing -> throwError $ InferenceError $ "Missing type for term " ++ show cstrName
-
-  -- Ex: Cons :: v1 -> List v1 -> List v1
-  tCstr <- instantiate scheme
-
-  -- \^ Not sure we need to grab this information here.
 
   -- Ex: Cons l ls -> ...
   let app = foldl P.App (P.Var cstrName) $ map P.Var names

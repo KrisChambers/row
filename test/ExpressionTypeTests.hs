@@ -7,7 +7,6 @@ import Test.Tasty.HUnit
 import Type.Inference
 import Type.Inference qualified as T
 import Data.Map ((!?))
-import Data.Set qualified as Set
 
 expressionTypeTests :: TestTree
 expressionTypeTests =
@@ -17,6 +16,7 @@ expressionTypeTests =
     -- , effectTests
     , effectDeclTest
     ]
+
 recordTests :: TestTree
 recordTests =
   testGroup
