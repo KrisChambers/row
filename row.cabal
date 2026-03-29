@@ -1,4 +1,4 @@
-cabal-version:      3.0
+cabal-version:      3.4
 -- The cabal-version field refers to the version of the .cabal specification,
 -- and can be different from the cabal-install (the tool) version and the
 -- Cabal (the library) version you are using. As such, the Cabal (the library)
@@ -66,14 +66,12 @@ library
         Interpreter,
         Report
 
-    -- Modules included in this library but not exported.
-    -- other-modules: Parser
-
     -- LANGUAGE extensions used by modules in this package.
-    -- other-extensions:
+    other-extensions: LambdaCase
 
     -- Other library packages from which modules are imported.
-    build-depends:    base ^>=4.21.0.0,
+    build-depends:
+            base ^>=4.20.1.0,
                       parsec,
                       mtl,
                       containers
@@ -95,11 +93,11 @@ executable row
     -- other-modules:
 
     -- LANGUAGE extensions used by modules in this package.
-    -- other-extensions:
+    -- other-extensions: LambdaCase
 
     -- Other library packages from which modules are imported.
     build-depends:
-        base ^>=4.21.0.0,
+        base ^>=4.20.1.0,
         row
 
     -- Directories containing source files.
@@ -139,7 +137,7 @@ test-suite row-test
 
     -- Test dependencies.
     build-depends:
-        base ^>=4.21.0.0,
+        base ^>=4.20.1.0,
         tasty >= 1.4,
         tasty-hunit >= 0.10,
         tasty-quickcheck >= 0.10,
