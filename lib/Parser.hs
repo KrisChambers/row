@@ -10,7 +10,9 @@ module Parser
     RecordRow (..),
     EffectRow (..),
     Op (Add, And, Subtract, Or),
-    Expr (Lit, Var, Lambda, App, If, BinOp, Let, Record, Perform, Handle),
+    Expr(..),
+    CaseArm(..),
+    -- Expr (Lit, Var, Lambda, App, If, BinOp, Let, Record, Perform, Handle),
     RecordExpr (RecordCstr, RecordAccess, RecordExtension),
     Literal (LitInt, LitBool, LitString, LitUnit),
     Parser,
@@ -167,6 +169,15 @@ data Handler = Handler
   }
   deriving (Show, Eq, Ord)
 
+data CaseArm = CaseArm String [String] Expr
+  deriving (Show, Eq, Ord)
+
+
+instance Report CaseArm where
+  prettyPrint (CaseArm dataCstrName names e2)= leftSide ++ " => " ++ prettyPrint e2
+      where
+        leftSide = foldr (\x a -> x ++ " " ++ a) "" (dataCstrName:names)
+
 data Expr
   = Var String
   | Lambda String (Maybe TypeAnn) Expr
@@ -178,6 +189,7 @@ data Expr
   | Record RecordExpr
   | Perform String String Expr -- perform E.op e
   | Handle Expr Handler
+  | Case Expr [CaseArm]
   -- TODO (kc): Can collapse the RecordExpression stuff into here.
   -- Record [(String, Expr)]
   -- Project Expr String
@@ -197,6 +209,7 @@ instance Report Expr where
       Record rexpr -> prettyPrint rexpr
       Perform a b c -> "perform " ++ a ++ "." ++ b ++ " " ++ prettyPrint c
       Handle e hdlr -> "handle " ++ prettyPrint e ++ " with " ++ prettyPrint hdlr
+      Case e arms -> "match " ++ prettyPrint e ++ " with\n\t\t" ++ (foldr (\r a -> prettyPrint r ++ "\n\t\t" ++ a) "" arms)
 
 instance Report Handler where
   prettyPrint (Handler (retV, retE) ops)= "{\n\t" ++ ppOps ++ "\n\t" ++ "return " ++ retV ++ " -> " ++ prettyPrint retE

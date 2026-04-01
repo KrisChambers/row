@@ -31,6 +31,7 @@ module Type.Inference (
   addDeclToEnv,
   inferDecl,
   createCstrInfo,
+  getCaseEnv,
 )
 where
 
@@ -38,6 +39,8 @@ import Control.Monad (foldM, when)
 import Control.Monad.Except
 import Control.Monad.State
 import Data.Bifunctor (bimap)
+import Data.Foldable (foldrM)
+import Data.List (isInfixOf)
 import Data.Map (Map, (!), (!?))
 import Data.Map qualified as Map
 import Data.Set (Set)
@@ -47,7 +50,6 @@ import Parser qualified as Expr (Expr (..))
 import Parser qualified as P
 import Parser qualified as RecordExpr (RecordExpr (..))
 import Report (Report (..))
-import Data.List (isInfixOf)
 
 data Type = Var String | Arrow Type Type Type | Record Type | EmptyRow | Row (String, Type) Type | TCon String | TApp Type Type
   deriving (Show, Ord)
@@ -308,7 +310,6 @@ addDeclToEnv env = \case
         throwError $ UnificationError $ "Error unifying " ++ name ++ "\n" ++ prettyPrint expr ++ " :: " ++ show err
       Right s -> return s
 
-
     let solved = apply sub tExpr
     let eExprGen = generalize solved
 
@@ -319,7 +320,6 @@ addDeclToEnv env = \case
     --     ++ "\n SUB :: " ++ show sub
     --     ++ "\n Result :: " ++ show solved
     --     ++ "\n\n"
-
 
     -- when ("MyConsole" `isInfixOf` show result) $ do
     --     let tester = generalize(apply sub $ Arrow (Var "v2") (Var "e6") tUnit)
@@ -592,31 +592,8 @@ infer env = \case
     (t_e1, fe, cs_e1) <- infer env e1
     (t_e2, arg_e, cs_e2) <- infer env e2
 
-
     let t = Arrow t_e2 fresh_e fresh_t
     let constraints = cs_e1 ++ cs_e2 ++ [Equals (t_e1, t), Equals (fresh_e, fe), Equals (fresh_e, arg_e)]
-
-    -- when ("Cons" `isInfixOf` (prettyPrint e1)) $ do
-    --   Tr.traceM $ "\n\n " ++ prettyPrint (Expr.App e1 e2)
-    --   Tr.traceM $ "\n e1 :: " ++ show t_e1 ++ "\n e2 :: " ++ show t_e2 ++ "\n"
-    --   Tr.traceM $ prettyPrintList constraints
-
-    -- when ("MyConsole" `isInfixOf` show e1) $ do
-    --   let remainingWidth value minL = if length value < minL
-    --         then minL - (length value)
-    --         else minL
-    --   let getSpaces value = take paddingSize $ repeat ' '
-    --         where paddingSize = remainingWidth value 20
-    --   let ppMap m = Map.foldrWithKey (\k v s -> s ++ k ++ (getSpaces k) ++ ":= " ++  show v ++ "\n" ) "" m
-    --   let sep name = "\n----" ++ insert ++ "--\n"
-    --         where insert = case name of
-    --                 "" -> ""
-    --                 x -> " " ++ x ++ " "
-
-    --   Tr.traceM $ sep "ENV" ++ ppMap (envVars env)
-    --   Tr.traceM $ sep "VARS" ++ show e1 ++ " : " ++ show t_e1
-    --   Tr.traceM $ show e2 ++ " : " ++ show t_e2 ++ sep ""
-    --   Tr.traceM $ sep "CONSTRAINTS" ++ show constraints
 
     return (fresh_t, fresh_e, constraints)
   Expr.Lit x -> do
@@ -843,11 +820,6 @@ infer env = \case
 
     let return_constraints = (Equals (retVarT, bodyT)) : retC -- type of x is Int
 
-    -- let aaa = envEffects env
-    -- let info = aaa ! "MyState"
-    -- let ops = effectInfoOps info
-    -- let getS = ops ! "get"
-
     ---- Need to generate constraints for the arguments and return type based on the schema for handler operations
     ---- Ex: get : () -> a  Needs to be instantiated with a type variable va
 
@@ -857,6 +829,64 @@ infer env = \case
     let effect_constraints = []
 
     return (resultT, hdlrRest, bodyC ++ return_constraints ++ type_constraints ++ effect_constraints ++ [Equals (retT, resultT), Equals (retE, hdlrRest)])
+  Expr.Case expr arms -> do
+    {-
+
+    This doesn't handle matching something more complicated like:
+      Cons _ (Cons value Nil) ->
+
+    For that I think the type of CaseArm would need to be
+      CaseArm expr expr
+
+    -}
+    tCase <- fresh TVar >>= newvar
+    eCase <- fresh EVar >>= newvar
+
+    (tMatch, eMatch, cMatch) <- infer env expr
+
+    -- TODO CaseArm should just be part of Expr
+    caseArmResult <- mapM (getCaseEnv env) arms
+
+    let armConstraints = foldr (\((tl, tr), e, cs) acc -> acc ++ cs ++ [Equals (tl, tMatch), Equals (tr, tCase), Equals (e, eCase)]) [] caseArmResult
+
+    -- This tMatch needs to constraint what is available on the left side of the match arm
+
+    return (tCase, eMatch, cMatch ++ armConstraints)
+
+getCaseEnv :: TypeEnv -> P.CaseArm -> Infer ((Type, Type), Type, [Constraint])
+getCaseEnv env (P.CaseArm cstrName names branch) = do
+  tCaseArm <- fresh TVar >>= newvar
+  eCaseArm <- fresh EVar >>= newvar
+
+  -- Imitating infer Var (cstrName)
+  scheme <- case lookupType env cstrName of
+    Just s -> return s
+    Nothing -> throwError $ InferenceError $ "Missing type for term " ++ show cstrName
+
+  -- Ex: Cons :: v1 -> List v1 -> List v1
+  tCstr <- instantiate scheme
+
+  -- \^ Not sure we need to grab this information here.
+
+  -- Ex: Cons l ls -> ...
+  let app = foldl P.App (P.Var cstrName) $ map P.Var names
+
+  -- This adds all of the variables in the left side to an environment so we can infer the right side
+  newEnv <- foldrM (\name ev -> extend ev name >>= \(t, _) -> return t) env names
+
+  -- This should ensure that the variable names introduced
+  -- in the left side of a match arm coincide with the data constructor types.
+  (tMatcher, eMatcher, cMatcher) <- infer newEnv app
+
+  -- Then the names introduced in the left side of the match arm are used as part of the
+  -- context for typing the right side.
+  (tBranch, eBranch, cBranch) <- infer newEnv branch
+
+  {-
+    We return (Type, Type) since the matcher (left side of ->) needs to be constrained by whatever the expression
+    is in the case <expr> of ... part of the statement.
+  -}
+  return ((tMatcher, tBranch), eCaseArm, cMatcher ++ cBranch ++ [Equals (tCaseArm, tBranch)])
 
 prettyPrintList :: (Show a) => [a] -> String
 prettyPrintList xs = foldr (\x agg -> agg ++ "\n\t," ++ show x) "[" xs
@@ -983,7 +1013,9 @@ inferType expr =
         Row (l, t) r' -> Row (l, substitute t) (substitute r')
         Record a -> Record $ substitute a
         TApp a b -> TApp (substitute a) (substitute b)
-        _ -> typ
+        Var _ -> typ
+        EmptyRow -> typ
+        TCon _ -> typ
 
 --- Applies t1 --> t2 over a list of constraints
 (->>) :: Type -> Type -> [Constraint] -> [Constraint]
@@ -1008,10 +1040,10 @@ solve (c : cs) =
           (Row (l, t) r, row) -> case toHead row l of
             Row (_, t') r' -> solve $ cs ++ [Equals (t, t'), Equals (r, r')]
             _ -> throwError $ InferenceError $ "Could not unify rows: " ++ prettyPrint t1 ++ " and " ++ prettyPrint t2
-          (TApp a1 a2, TApp b1 b2) |
-            a1 == b1 -> solve $ cs ++ [Equals (a2, b2)]
+          (TApp a1 a2, TApp b1 b2)
+            | a1 == b1 ->
+                solve $ cs ++ [Equals (a2, b2)]
           _ -> throwError $ InferenceError $ "Could not unify " ++ prettyPrint t1 ++ " and " ++ prettyPrint t2
-
     Merge rLeft rRight rFinal -> do
       -- We need to deal with the merge constraint after other constraints
       -- This is mainly since if rLeft and rRight are variables then we need to solve them first
@@ -1042,7 +1074,6 @@ mergeRow r1 r2 = case (r1, r2) of
   (Var _, Var _) -> Left . UnificationError $ "Can not merge two open rows"
   (a, b) -> Left . UnificationError $ "Can only merge rows not (" ++ show a ++ ", " ++ show b ++ ")"
 
--- TODO (kc): Need some unit tests
 getFreshVarMap :: Set String -> Infer (Map String String)
 getFreshVarMap vars = do
   let getValue v = do
