@@ -121,7 +121,8 @@ test-suite row-test
                     ConstraintSolveSpec,
                     ExpressionTypeTests,
                     ParseTest,
-                    EffectTests
+                    EffectTests,
+                    InterpreterTests
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:

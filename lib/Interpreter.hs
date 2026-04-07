@@ -1,4 +1,4 @@
-module Interpreter (eval, evalDecls, evalExpr, Env, EvaluationError, Value (RInt, RBool, RFunc)) where
+module Interpreter (eval, evalDecls, evalExpr, Env(..), EvaluationError, Value (..), fromDecl) where
 
 import Control.Monad (ap, when, (>=>))
 import Data.Char (toLower)
@@ -6,6 +6,7 @@ import Data.Map (Map, (!), (!?))
 import Data.Map qualified as Map
 import Debug.Trace qualified as Tr
 import Parser
+import Control.Monad.Error.Class (MonadError(throwError))
 
 enableTrace :: Bool
 enableTrace = False
@@ -37,6 +38,20 @@ data Value
   | RString String
   | RRecord [(String, Value)]
   | REffClosure (Value -> Eval Value)
+  | RVariant String [Value] -- "Cons" 1 Nil
+
+instance Eq Value where
+  RInt i == RInt n = i == n
+  RBool b == RBool b2 = b == b2
+  RUnit == RUnit = True
+  RString s == RString s2 = s == s2
+  RRecord rs == RRecord rs' = rs == rs'
+  RVariant n vs == RVariant n' vs' = n == n' && vs == vs'
+  _ == _ = False
+---  REffClosure f == REffClosure g = False
+
+
+
 
 instance Show Value where
   show = \case
@@ -50,7 +65,10 @@ instance Show Value where
     RBool v -> show v
     RString v -> v
     REffClosure _ -> "?CLOSURE?"
+    RVariant name value -> name ++ " " ++ show value
 
+-- This needs some documentation.
+-- Been a while since I implemented this
 data Eval a
   = Done a
   | Err String
@@ -84,11 +102,16 @@ emptyEnv = Env { envValues = Map.empty, envDecl = Map.empty }
 fromDecl :: [Decl] -> Env
 fromDecl ds =
     let
-      _fromDecl ((LetDecl name t expr):xs) env = _fromDecl xs (Map.insert name expr env)
+      _fromDecl ((LetDecl name _ expr):decls) env = _fromDecl decls (env { envDecl = Map.insert name expr ( envDecl env)} )
+      _fromDecl ((DataDecl _ _typeName z):decls) env =  _fromDecl decls ( env { envValues = newValues z })
+          where
+            newValues cstrs = foldr (\(name, hs) environ -> Map.insert name (build_function name hs []) environ) (envValues env) cstrs
+            build_function dataCstr (_:xs) finalArgs = REffClosure (\x -> Done $ build_function dataCstr xs (x:finalArgs))
+            build_function dataCstr [] finalArgs = RVariant dataCstr (reverse finalArgs)
       _fromDecl (_:xs) env = _fromDecl xs env
       _fromDecl [] env = env
     in
-      Env { envValues = Map.empty, envDecl = _fromDecl ds Map.empty }
+      _fromDecl ds emptyEnv
 
 
 data EvaluationError
@@ -264,6 +287,46 @@ eval env (Record (RecordAccess e b)) = do
         Nothing -> Err $ "Could not find a value for " ++ show b
         Just v -> return v
     _ -> Err "Accessing Records"
+eval env (Case expr match_arms) = do
+  -- 1. Evaluate the matcher
+  matcher <- eval env expr
+
+  let matchArm = do
+        let isMatchArm (CaseArm caseName _ _) = case matcher of
+              RVariant name _ -> name == caseName
+              _ -> False
+
+        case filter isMatchArm match_arms of
+            x:_ -> Just x
+            [] -> Nothing
+
+  let extendVars name value environ = environ { envValues = Map.insert name value (envValues environ) }
+
+
+  -- 2. Find the vars and expression for the arm that matches our variant
+  (vars, caseExpr) <- case matchArm of
+        Just (CaseArm _ vars caseExpr) -> Done (vars, caseExpr)
+        Nothing -> Err $ "Could not find a match arm for " ++ show matchArm
+
+  -- 3. Now we need to setup the context based on the variables being matched
+  newEnv <- case matcher of
+      RVariant _ values -> Done $ foldr (\(name, value) environ -> extendVars name value environ) env $ zip vars values
+      _ -> Err "Case expression not a variant"
+
+  -- 4. Then evaluate the right side of the case arm with the new context
+
+  value <- eval newEnv caseExpr
+
+
+  -- We need to find the matching arm ...
+  -- let getMatchArm matcher = do
+  --
+  -- let app = foldl P.App (P.Var cstrName) $ map P.Var names
+
+  return value
+
+
+
 eval env (Perform eff op expr) = do
   v <- eval env expr
   Perform' eff op [v] pure
