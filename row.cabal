@@ -62,7 +62,6 @@ library
     exposed-modules:
         Parser,
         Type.Inference,
-        Transform.CPS,
         Interpreter,
         Report
 

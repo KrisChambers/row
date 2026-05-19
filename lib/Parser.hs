@@ -525,8 +525,13 @@ literal_bool =
 literal_int :: Parser Literal
 literal_int = fmap (\x -> LitInt (read x :: Integer)) (many1 digit)
 
+literal_string :: Parser Literal
+literal_string = LitString <$> between (char '\"') (char '\"') ( many (noneOf "\""))
+
+
 literal :: Parser Expr
-literal = try (fmap Lit (literal_bool <|> literal_int <|> literal_unit)) <|> variable
+literal = try (fmap Lit (literal_string <|> literal_bool <|> literal_int <|> literal_unit)) <|> variable
+
 
 variable :: Parser Expr
 variable = fmap Var identifier

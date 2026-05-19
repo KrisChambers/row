@@ -126,6 +126,10 @@ letDeclarationTests =
         testInput
           "let getAge = \\x -> x.age"
           $ P.LetDecl "getAge" Nothing (P.Lambda "x" Nothing (P.Record $ P.RecordAccess (P.Var "x") "age"))
+    , testCase "String constant assignment" $ do
+        testInput
+          "let s = \"mystring\""
+          $ P.LetDecl "s" Nothing (P.Lit $ P.LitString "mystring")
     ]
  where
   testInput = test P.let_declaration

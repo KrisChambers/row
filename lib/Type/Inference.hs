@@ -143,7 +143,9 @@ instance Show TypeEnv where
     showCstrs = foldr (\(name, info) b -> b ++ "\n\t" ++ name ++ " : " ++ show info) "\t" (Map.toList $ envCstors t)
 
 lookupType :: TypeEnv -> String -> Maybe Scheme
-lookupType env varName = Map.lookup varName $ envVars env
+lookupType env varName = scheme
+    where
+      scheme = Map.lookup varName $ envVars env
 
 extendVars :: TypeEnv -> String -> Scheme -> TypeEnv
 extendVars env name scheme = env{envVars = Map.insert name scheme (envVars env)}
