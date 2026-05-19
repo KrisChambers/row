@@ -1,0 +1,30 @@
+/* Top level variables */
+
+let thing = 1;
+let stuff = "thing";
+
+/* Top level function declarations */
+
+let main = \x -> x;
+/* maybe: let main x = x */
+
+
+let do_stuff =
+  let name = "kris"
+  in
+    name;
+
+data Maybe a = Nothing | Just a
+
+data List a = Nil | Cons a (List a) (List (List b))
+
+data DayOfWeek = Monday | Tuesday | Wednesday | Thursday | Friday | Saturday | Sunday
+
+effect State a {
+  get: () -> Int,
+  set: Int -> ()
+}
+
+
+
+
