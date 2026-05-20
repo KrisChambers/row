@@ -14,6 +14,7 @@ interpreterTests =
     [ envBuilding
     , variantUseTest
     , caseEvaluation
+    , binOp
     ]
 
 eList :: P.Decl
@@ -47,12 +48,12 @@ caseEvaluation =
                   , P.CaseArm "Cons" ["value", "rest"] (P.Var "rest")
                   ]
         case evalDecls [eList, expr] of
-            Left a -> assertFailure $ show a
-            Right b -> do
-              b @?= RVariant "Cons" [RInt 2, RVariant "Nil" []]
+          Left a -> assertFailure $ show a
+          Right b -> do
+            b @?= RVariant "Cons" [RInt 2, RVariant "Nil" []]
     ]
  where
-  cons value = P.App(P.App (P.Var "Cons") value)
+  cons value = P.App (P.App (P.Var "Cons") value)
   nil = P.Var "Nil"
   litInt = P.Lit . P.LitInt
   litBool = P.Lit . P.LitBool
@@ -86,4 +87,29 @@ envBuilding =
 
         expect "main" decls "Expected main declaration in environment"
         expect "Cons" vars $ "Expected Cons data constructor in environment: \n\n" ++ show vars
+    ]
+
+vstr :: String -> P.Expr
+vstr s = P.Lit $ P.LitString s
+
+vint :: Integer -> P.Expr
+vint i = P.Lit $ P.LitInt i
+
+plus :: P.Expr -> P.Expr -> P.Expr
+plus l r = P.BinOp P.Add l r
+
+equals :: P.Expr -> P.Expr -> P.Expr
+equals l r = P.BinOp P.Equals l r
+
+binOp :: TestTree
+binOp =
+  testGroup
+    "Evaluating binary operations on values"
+    [ testCase "String Equality" $ do
+        let expr = eMain $ vstr "S" `equals` vstr "S"
+
+        case evalDecls [expr] of
+          Left a -> assertFailure $ show a
+          Right b -> do
+            b @?= RBool True
     ]

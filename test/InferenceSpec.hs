@@ -8,7 +8,8 @@ import Data.List (isInfixOf, isPrefixOf)
 import Data.Map qualified as Map
 import Data.Set qualified as Set
 import Debug.Trace qualified as Tr
-import Parser (Expr (..), Literal (..), Op (..))
+--
+--import Parser (Expr (..), Literal (..), Op (..))
 import Parser qualified as P
 import Test.Tasty
 import Test.Tasty.HUnit
@@ -37,7 +38,7 @@ inferenceTests =
     , dataConstructionTest
     ]
 
-doInfer :: T.TypeEnv -> Expr -> Either TypeError (Type, Type, [Constraint])
+doInfer :: T.TypeEnv -> P.Expr -> Either TypeError (Type, Type, [Constraint])
 doInfer env expr = runInfer (infer env expr) 0 0
 
 doInferDecl :: T.TypeEnv -> P.Decl -> Either TypeError T.TypeEnv
@@ -69,21 +70,21 @@ literalTests =
   testGroup
     "Literals"
     [ testCase "Integer literal: type=Int, constraints=[]" $ do
-        let expr = Lit (LitInt 42)
+        let expr = P.Lit (P.LitInt 42)
         case doInfer T.prelude expr of
           Right (t, e, cs) -> do
             t @?= tInt
             cs @?= []
           Left err -> assertFailure $ show err
     , testCase "Boolean literal: type=Bool, constraints=[]" $ do
-        let expr = Lit (LitBool True)
+        let expr = P.Lit (P.LitBool True)
         case doInfer T.prelude expr of
           Right (t, e, cs) -> do
             t @?= tBool
             cs @?= []
           Left err -> assertFailure $ show err
     , testCase "Boolean False literal: type=Bool, constraints=[]" $ do
-        let expr = Lit (LitBool False)
+        let expr = P.Lit (P.LitBool False)
         case doInfer T.prelude expr of
           Right (t, e, cs) -> do
             t @?= tBool
@@ -136,7 +137,7 @@ lambdaTests =
   testGroup
     "Lambda"
     [ testCase "Identity (\\x -> x): Arrow v1 v1, constraints=[]" $ do
-        let expr = Lambda "x" Nothing (P.Var "x")
+        let expr = P.Lambda "x" Nothing (P.Var "x")
         case doInfer T.prelude expr of
           Right (t, e, cs) -> do
             cs @?= []
@@ -145,7 +146,7 @@ lambdaTests =
               _ -> assertFailure $ "Expected Arrow, got: " ++ show t
           Left err -> assertFailure $ show err
     , testCase "Const (\\x -> \\y -> x): Arrow v1 (Arrow v2 v1)" $ do
-        let expr = Lambda "x" Nothing (Lambda "y" Nothing (P.Var "x"))
+        let expr = P.Lambda "x" Nothing (P.Lambda "y" Nothing (P.Var "x"))
         case doInfer T.prelude expr of
           Right (t, e, cs) -> do
             cs @?= []
@@ -156,7 +157,7 @@ lambdaTests =
               _ -> assertFailure $ "Expected nested Arrow, got: " ++ show t
           Left err -> assertFailure $ show err
     , testCase "Lambda with Int body (\\x -> 42): Arrow v1 Int, constraints=[]" $ do
-        let expr = Lambda "x" Nothing (Lit (LitInt 42))
+        let expr = P.Lambda "x" Nothing (P.Lit (P.LitInt 42))
         case doInfer T.prelude expr of
           Right (t, e, cs) -> do
             cs @?= []
@@ -165,7 +166,7 @@ lambdaTests =
               _ -> assertFailure $ "Expected Arrow _ Int, got: " ++ show t
           Left err -> assertFailure $ show err
     , testCase "Lambda constrains body (\\x -> x + 1): has (v1, Int) constraint" $ do
-        let expr = Lambda "x" Nothing (BinOp Add (P.Var "x") (Lit (LitInt 1)))
+        let expr = P.Lambda "x" Nothing (P.BinOp P.Add (P.Var "x") (P.Lit (P.LitInt 1)))
         case doInfer T.prelude expr of
           Right (t, e, cs) -> do
             case t of
@@ -186,7 +187,7 @@ applicationTests =
   testGroup
     "Application"
     [ testCase "(\\x -> x) 42: produces function unification constraint" $ do
-        let expr = App (Lambda "x" Nothing (P.Var "x")) (Lit (LitInt 42))
+        let expr = P.App (P.Lambda "x" Nothing (P.Var "x")) (P.Lit (P.LitInt 42))
         case doInfer T.prelude expr of
           Right (t, e, cs) -> do
             case t of
@@ -196,7 +197,7 @@ applicationTests =
           Left err -> assertFailure $ show err
     , testCase "f x where f:Int->Bool, x:Int: constraint links f to arg->result" $ do
         let env = prelude{envVars = Map.union (envVars prelude) $ Map.fromList [("f", Forall Set.empty $ Arrow tInt EmptyRow tBool), ("x", Forall Set.empty tInt)]}
-        let expr = App (P.Var "f") (P.Var "x")
+        let expr = P.App (P.Var "f") (P.Var "x")
         case doInfer env expr of
           Right (t, e, cs) -> do
             case t of
@@ -215,14 +216,14 @@ applicationTests =
                         , ("y", Forall Set.empty tInt)
                         ]
                 }
-        let expr = App (App (P.Var "f") (P.Var "x")) (P.Var "y")
+        let expr = P.App (P.App (P.Var "f") (P.Var "x")) (P.Var "y")
         case doInfer env expr of
           Right (_, e, cs) -> do
             assertBool "Should have >= 2 constraints" (length cs >= 2)
           Left err -> assertFailure $ show err
     , testCase "Application with undefined arg: propagates error" $ do
         let env = prelude{envVars = Map.union (envVars prelude) $ Map.fromList [("f", Forall Set.empty $ Arrow tInt EmptyRow tInt)]}
-        let expr = App (P.Var "f") (P.Var "undefined_arg")
+        let expr = P.App (P.Var "f") (P.Var "undefined_arg")
         case doInfer env expr of
           Left (InferenceError _) -> return ()
           Left err -> assertFailure $ "Wrong error: " ++ show err
@@ -234,7 +235,7 @@ conditionalTests =
   testGroup
     "Conditionals"
     [ testCase "if true then 1 else 2: has (Bool,Bool) and (Int,Int) constraints" $ do
-        let expr = If (Lit (LitBool True)) (Lit (LitInt 1)) (Lit (LitInt 2))
+        let expr = P.If (P.Lit (P.LitBool True)) (P.Lit (P.LitInt 1)) (P.Lit (P.LitInt 2))
         case doInfer T.prelude expr of
           Right (t, e, cs) -> do
             t @?= tInt
@@ -243,7 +244,7 @@ conditionalTests =
           Left err -> assertFailure $ show err
     , testCase "if x then 1 else 2 (x:Var): constrains x to Bool" $ do
         let env = prelude{envVars = Map.union (envVars prelude) $ Map.fromList [("x", Forall Set.empty $ T.Var "vx")]}
-        let expr = If (P.Var "x") (Lit (LitInt 1)) (Lit (LitInt 2))
+        let expr = P.If (P.Var "x") (P.Lit (P.LitInt 1)) (P.Lit (P.LitInt 2))
         case doInfer env expr of
           Right (_, e, cs) -> do
             let hasBoolConstraint =
@@ -257,7 +258,7 @@ conditionalTests =
           Left err -> assertFailure $ show err
     , testCase "if true then x else y: constrains branches to unify" $ do
         let env = prelude{envVars = Map.union (envVars prelude) $ Map.fromList [("x", Forall Set.empty $ T.Var "vx"), ("y", Forall Set.empty $ T.Var "vy")]}
-        let expr = If (Lit (LitBool True)) (P.Var "x") (P.Var "y")
+        let expr = P.If (P.Lit (P.LitBool True)) (P.Var "x") (P.Var "y")
         case doInfer env expr of
           Right (t, e, cs) -> do
             t @?= T.Var "vx"
@@ -277,7 +278,7 @@ binaryOpTests =
   testGroup
     "Binary Operations"
     [ testCase "1 + 2: type=Int, constraints=[(Int,Int),(Int,Int), .. effects]" $ do
-        let expr = BinOp Add (Lit (LitInt 1)) (Lit (LitInt 2))
+        let expr = P.BinOp P.Add (P.Lit (P.LitInt 1)) (P.Lit (P.LitInt 2))
         case doInfer T.prelude expr of
           Right (t, e, cs) -> do
             t @?= tInt
@@ -285,7 +286,7 @@ binaryOpTests =
           Left err -> assertFailure $ show err
     , testCase "x + y (x,y:Var): constrains both to Int" $ do
         let env = prelude{envVars = Map.union (envVars prelude) $ Map.fromList [("x", Forall Set.empty $ T.Var "vx"), ("y", Forall Set.empty $ T.Var "vy")]}
-        let expr = BinOp Add (P.Var "x") (P.Var "y")
+        let expr = P.BinOp P.Add (P.Var "x") (P.Var "y")
         case doInfer env expr of
           Right (t, e, cs) -> do
             t @?= tInt
@@ -295,14 +296,14 @@ binaryOpTests =
               Equals (T.Var "vy", tInt) `elem` cs || Equals (tInt, T.Var "vy") `elem` cs
           Left err -> assertFailure $ show err
     , testCase "5 - 3: type=Int, constraints for Int operands" $ do
-        let expr = BinOp Subtract (Lit (LitInt 5)) (Lit (LitInt 3))
+        let expr = P.BinOp P.Subtract (P.Lit (P.LitInt 5)) (P.Lit (P.LitInt 3))
         case doInfer T.prelude expr of
           Right (t, e, cs) -> do
             t @?= tInt
             cs @?= [Equals (tInt, tInt), Equals (tInt, tInt), Equals (T.Var "e1", T.Var "e3"), Equals (T.Var "e2", T.Var "e3")]
           Left err -> assertFailure $ show err
     , testCase "true && false: type=Bool, constraints=[(Bool,Bool),(Bool,Bool)]" $ do
-        let expr = BinOp And (Lit (LitBool True)) (Lit (LitBool False))
+        let expr = P.BinOp P.And (P.Lit (P.LitBool True)) (P.Lit (P.LitBool False))
         case doInfer T.prelude expr of
           Right (t, e, cs) -> do
             t @?= tBool
@@ -310,7 +311,7 @@ binaryOpTests =
           Left err -> assertFailure $ show err
     , testCase "x && y (x,y:Var): constrains both to Bool" $ do
         let env = prelude{envVars = Map.union (envVars prelude) $ Map.fromList [("x", Forall Set.empty $ T.Var "vx"), ("y", Forall Set.empty $ T.Var "vy")]}
-        let expr = BinOp And (P.Var "x") (P.Var "y")
+        let expr = P.BinOp P.And (P.Var "x") (P.Var "y")
         case doInfer env expr of
           Right (t, e, cs) -> do
             t @?= tBool
@@ -320,7 +321,7 @@ binaryOpTests =
               Equals (T.Var "vy", tBool) `elem` cs || Equals (tBool, T.Var "vy") `elem` cs
           Left err -> assertFailure $ show err
     , testCase "true || false: type=Bool" $ do
-        let expr = BinOp Or (Lit (LitBool True)) (Lit (LitBool False))
+        let expr = P.BinOp P.Or (P.Lit (P.LitBool True)) (P.Lit (P.LitBool False))
         case doInfer T.prelude expr of
           Right (t, e, _) -> t @?= tBool
           Left err -> assertFailure $ show err
@@ -331,7 +332,7 @@ letBindingTests =
   testGroup
     "Let Bindings"
     [ testCase "let x = 42 in x: type resolves to Int" $ do
-        let expr = Let "x" (Lit (LitInt 42)) (P.Var "x")
+        let expr = P.Let "x" (P.Lit (P.LitInt 42)) (P.Var "x")
         case doInfer T.prelude expr of
           Right (t, e, _) -> do
             if t == tInt
@@ -339,7 +340,7 @@ letBindingTests =
               else assertFailure $ "Expected Int or Scheme _ Int, got: " ++ show t
           Left err -> assertFailure $ show err
     , testCase "let f = \\x -> x in f: generalizes to polymorphic scheme" $ do
-        let expr = Let "f" (Lambda "x" Nothing (P.Var "x")) (P.Var "f")
+        let expr = P.Let "f" (P.Lambda "x" Nothing (P.Var "x")) (P.Var "f")
         case doInfer T.prelude expr of
           Right (t, e, _) -> do
             case t of
@@ -350,10 +351,10 @@ letBindingTests =
           Left err -> assertFailure $ show err
     , testCase "let id = \\x -> x in id 42: polymorphic use" $ do
         let expr =
-              Let
+              P.Let
                 "id"
-                (Lambda "x" Nothing (P.Var "x"))
-                (App (P.Var "id") (Lit (LitInt 42)))
+                (P.Lambda "x" Nothing (P.Var "x"))
+                (P.App (P.Var "id") (P.Lit (P.LitInt 42)))
         case doInfer T.prelude expr of
           Right (t, e, _) -> do
             case t of
@@ -363,7 +364,7 @@ letBindingTests =
           Left err -> assertFailure $ show err
     , testCase "let x = y in x (y:Int in env): produces constraints" $ do
         let env = prelude{envVars = Map.union (envVars prelude) $ Map.fromList [("y", Forall Set.empty tInt)]}
-        let expr = Let "x" (P.Var "y") (P.Var "x")
+        let expr = P.Let "x" (P.Var "y") (P.Var "x")
         case doInfer env expr of
           Right (_, e, cs) -> do
             assertBool "Should have constraints" (not (null cs))
@@ -376,7 +377,7 @@ declTests =
     "Declaration Tests (addDeclToEnv)"
     [ -- Basic value bindings
       testCase "let x = 42: adds x:Int to env" $ do
-        let decl = P.LetDecl "x" Nothing (Lit (LitInt 42))
+        let decl = P.LetDecl "x" Nothing (P.Lit (P.LitInt 42))
         case doInferDecl T.prelude decl of
           Right env' -> do
             case Map.lookup "x" (envVars env') of
@@ -386,7 +387,7 @@ declTests =
               Nothing -> assertFailure "x not found in env"
           Left err -> assertFailure $ show err
     , testCase "let flag = true: adds flag:Bool to env" $ do
-        let decl = P.LetDecl "flag" Nothing (Lit (LitBool True))
+        let decl = P.LetDecl "flag" Nothing (P.Lit (P.LitBool True))
         case doInferDecl T.prelude decl of
           Right env' -> do
             case Map.lookup "flag" (envVars env') of
@@ -407,7 +408,7 @@ declTests =
           Left err -> assertFailure $ show err
     , -- Lambda bindings
       testCase "let id = \\x -> x: adds polymorphic identity" $ do
-        let decl = P.LetDecl "id" Nothing (Lambda "x" Nothing (P.Var "x"))
+        let decl = P.LetDecl "id" Nothing (P.Lambda "x" Nothing (P.Var "x"))
         case doInferDecl T.prelude decl of
           Right env' -> do
             case Map.lookup "id" (envVars env') of
@@ -419,7 +420,7 @@ declTests =
               Nothing -> assertFailure "id not found in env"
           Left err -> assertFailure $ show err
     , testCase "let const = \\x -> \\y -> x: adds polymorphic const" $ do
-        let decl = P.LetDecl "const" Nothing (Lambda "x" Nothing (Lambda "y" Nothing (P.Var "x")))
+        let decl = P.LetDecl "const" Nothing (P.Lambda "x" Nothing (P.Lambda "y" Nothing (P.Var "x")))
         case doInferDecl T.prelude decl of
           Right env' -> do
             case Map.lookup "const" (envVars env') of
@@ -431,7 +432,7 @@ declTests =
               Nothing -> assertFailure "const not found in env"
           Left err -> assertFailure $ show err
     , testCase "let f = \\x -> x + 1: adds f: Int -> Int" $ do
-        let decl = P.LetDecl "f" Nothing (Lambda "x" Nothing (BinOp Add (P.Var "x") (Lit (LitInt 1))))
+        let decl = P.LetDecl "f" Nothing (P.Lambda "x" Nothing (P.BinOp P.Add (P.Var "x") (P.Lit (P.LitInt 1))))
         case doInferDecl T.prelude decl of
           Right env' -> do
             case Map.lookup "f" (envVars env') of
@@ -458,7 +459,7 @@ declTests =
           Left err -> assertFailure $ show err
     , testCase "let z = f 42 (f:Int->Bool in env): z gets Bool type" $ do
         let env = prelude{envVars = Map.union (envVars prelude) $ Map.fromList [("f", Forall Set.empty $ Arrow tInt EmptyRow tBool)]}
-        let decl = P.LetDecl "z" Nothing (App (P.Var "f") (Lit (LitInt 42)))
+        let decl = P.LetDecl "z" Nothing (P.App (P.Var "f") (P.Lit (P.LitInt 42)))
         case doInferDecl env decl of
           Right env' -> do
             case Map.lookup "z" (envVars env') of
@@ -470,7 +471,7 @@ declTests =
     , -- Shadowing
       testCase "let x = 42 shadows x:Bool: x becomes Int" $ do
         let env = prelude{envVars = Map.union (envVars prelude) $ Map.fromList [("x", Forall Set.empty tBool)]}
-        let decl = P.LetDecl "x" Nothing (Lit (LitInt 42))
+        let decl = P.LetDecl "x" Nothing (P.Lit (P.LitInt 42))
         case doInferDecl env decl of
           Right env' -> do
             case Map.lookup "x" (envVars env') of
@@ -605,7 +606,7 @@ recordTests =
   testGroup
     "Record rows"
     [ testCase "{ x = 0, y = 0 } resolves to a Record type { x: Int, y: Int }" $ do
-        let expr = P.Record (P.RecordCstr [("x", Lit (LitInt 0)), ("y", Lit (LitInt 0))])
+        let expr = P.Record (P.RecordCstr [("x", P.Lit (P.LitInt 0)), ("y", P.Lit (P.LitInt 0))])
         case doInfer T.prelude expr of
           Right (t, e, _) -> do
             case t of
@@ -619,7 +620,7 @@ recordTests =
               _ -> assertFailure ""
           Left err -> assertFailure $ show err
     , testCase "Simple record extension { r with l = 5 } should give a type { l : Int | p }" $ do
-        let expr = P.Record $ P.RecordExtension (P.Record $ P.RecordCstr []) "l" (P.Lit $ LitInt 5)
+        let expr = P.Record $ P.RecordExtension (P.Record $ P.RecordCstr []) "l" (P.Lit $ P.LitInt 5)
         case doInfer T.prelude expr of
           Right (t, e, c) -> do
             case t of
@@ -632,7 +633,7 @@ recordTests =
     , testCase "Extend a non_empty record: { 2dOrigin with z = 0 }" $ do
         let origin2d = T.Record (T.Row ("x", tInt) (T.Row ("y", tInt) EmptyRow))
         let env = prelude{envVars = Map.union (envVars prelude) $ Map.insert "origin2d" (Forall Set.empty origin2d) (envVars prelude)}
-        let expr = P.Record (P.RecordExtension (P.Var "origin2d") "z" (P.Lit $ LitInt 0))
+        let expr = P.Record (P.RecordExtension (P.Var "origin2d") "z" (P.Lit $ P.LitInt 0))
         case doInfer env expr of
           Left err -> assertFailure $ show err
           Right (t, _e, c) -> do
@@ -768,7 +769,7 @@ effectStubTests =
   testGroup
     "Effect Stub Tests"
     [ testCase "Literal generates an effect variable" $ do
-        let expr = Lit (LitInt 42)
+        let expr = P.Lit (P.LitInt 42)
         case doInfer T.prelude expr of
           Right (_t, e, _cs) -> do
             case e of
@@ -776,7 +777,7 @@ effectStubTests =
               _ -> assertFailure $ "Expected effect variable, got: " ++ show e
           Left err -> assertFailure $ show err
     , testCase "Lambda body effect flows to arrow effect" $ do
-        let expr = Lambda "x" Nothing (P.Var "x")
+        let expr = P.Lambda "x" Nothing (P.Var "x")
         case doInfer T.prelude expr of
           Right (t, _lambdaEffect, _cs) -> do
             case t of
@@ -787,30 +788,30 @@ effectStubTests =
               _ -> assertFailure "Expected Arrow type"
           Left err -> assertFailure $ show err
     , testCase "Application generates effect constraints" $ do
-        let expr = App (Lambda "x" Nothing (P.Var "x")) (Lit (LitInt 42))
+        let expr = P.App (P.Lambda "x" Nothing (P.Var "x")) (P.Lit (P.LitInt 42))
         case doInfer T.prelude expr of
           Right (_t, _e, cs) -> do
             let hasEffectConstraint = any isEffectConstraint cs
             assertBool "Should have effect-related constraint" hasEffectConstraint
           Left err -> assertFailure $ show err
     , testCase "Binary operations have EmptyRow effect" $ do
-        let expr = BinOp Add (Lit (LitInt 1)) (Lit (LitInt 2))
+        let expr = P.BinOp P.Add (P.Lit (P.LitInt 1)) (P.Lit (P.LitInt 2))
         case doInfer T.prelude expr of
           Right (_t, e, _cs) -> e @?= T.Var "e3"
           Left err -> assertFailure $ show err
     , testCase "Conditionals have EmptyRow effect" $ do
-        let expr = If (Lit (LitBool True)) (Lit (LitInt 1)) (Lit (LitInt 2))
+        let expr = P.If (P.Lit (P.LitBool True)) (P.Lit (P.LitInt 1)) (P.Lit (P.LitInt 2))
         case doInfer T.prelude expr of
           Right (_t, e, _cs) -> e @?= EmptyRow
           Left err -> assertFailure $ show err
     , testCase "STUB: Let binding infers without error" $ do
-        let expr = Let "x" (Lit (LitInt 42)) (P.Var "x")
+        let expr = P.Let "x" (P.Lit (P.LitInt 42)) (P.Var "x")
         case doInfer T.prelude expr of
           Right (_, e, _) -> do
             e @?= T.Var "e1" -- This isn't all that great
           Left err -> assertFailure $ show err
     , testCase "Record construction has effect" $ do
-        let expr = P.Record (P.RecordCstr [("x", Lit (LitInt 0))])
+        let expr = P.Record (P.RecordCstr [("x", P.Lit (P.LitInt 0))])
         case doInfer T.prelude expr of
           Right (_t, e, _cs) ->
             case e of
@@ -856,7 +857,7 @@ effectDeclTests =
     , testCase "Lambda with Perform has effect variable in arrow type" $ do
         let consoleEffect = P.EffectDecl "Console" [] [("print", P.TFun (P.TCon "String" []) (P.TCon "()" []) P.EEmptyRow)]
         env <- either (assertFailure . show) return $ inferDecl [consoleEffect]
-        let expr = Lambda "x" Nothing (P.Perform "Console" "print" (P.Var "x"))
+        let expr = P.Lambda "x" Nothing (P.Perform "Console" "print" (P.Var "x"))
         case doInfer env expr of
           Right (t, _e, _cs) -> do
             case t of

@@ -130,6 +130,10 @@ letDeclarationTests =
         testInput
           "let s = \"mystring\""
           $ P.LetDecl "s" Nothing (P.Lit $ P.LitString "mystring")
+    , testCase "Basic Equality" $ do
+        testInput
+          "let s = 2 == 2"
+          $ P.LetDecl "s" Nothing (P.BinOp P.Equals (P.Lit $ P.LitInt 2) (P.Lit $ P.LitInt 2))
     ]
  where
   testInput = test P.let_declaration

@@ -9,7 +9,7 @@ module Parser
     Type (..),
     RecordRow (..),
     EffectRow (..),
-    Op (Add, And, Subtract, Or),
+    Op (..),
     Expr(..),
     CaseArm(..),
     -- Expr (Lit, Var, Lambda, App, If, BinOp, Let, Record, Perform, Handle),
@@ -69,7 +69,7 @@ instance Report Literal where
       LitString i -> i
       LitUnit -> "()"
 
-data Op = Add | Subtract | And | Or
+data Op = Add | Subtract | And | Or | Equals
   deriving (Show, Eq, Ord)
 
 instance Report Op where
@@ -79,6 +79,7 @@ instance Report Op where
       Subtract -> "*"
       And -> "&&"
       Or -> "||"
+      Equals -> "=="
 
 data RecordExpr = RecordCstr [(String, Expr)] | RecordAccess Expr String | RecordExtension Expr String Expr
   deriving (Show, Eq, Ord)
@@ -611,6 +612,7 @@ parse_binary_op =
     <|> (try (string "&&") >> return And)
     <|> (try (char '+') >> return Add)
     <|> (try (char '-') >> return Subtract)
+    <|> (try (string "==") >> return Equals)
 
 parse_binary_expr :: Parser Expr
 parse_binary_expr = do

@@ -696,6 +696,7 @@ infer env = \case
 
     let int_cs = (tInt, result_e, [Equals (l_t, tInt), Equals (r_t, tInt)] ++ eCst)
     let bool_cs = (tBool, result_e, [Equals (l_t, tBool), Equals (r_t, tBool)] ++ eCst)
+    let equals_cs = (tBool, result_e, [Equals (l_t, r_t)] ++ eCst)
     -- return (binT, l_e, c)
 
     return $ case op of
@@ -703,6 +704,8 @@ infer env = \case
       P.Subtract -> int_cs
       P.And -> bool_cs
       P.Or -> bool_cs
+      P.Equals -> equals_cs
+
   Expr.Record (RecordExpr.RecordCstr assignments) -> do
     let do_infer (l, e) = do
           result <- infer env e

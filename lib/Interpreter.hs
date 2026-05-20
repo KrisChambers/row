@@ -159,10 +159,16 @@ eval env (BinOp op left right) = do
     (RInt l, RInt r) -> case op of
       Add -> Done $ RInt $ l + r
       Subtract -> Done $ RInt $ l - r
+      Equals -> Done $ RBool $ l == r
       _ -> Err $ "Not implemented : Binary operation " ++ show op
     (RBool l, RBool r) -> case op of
       And -> Done $ RBool $ l && r
       Or -> Done $ RBool $ l || r
+      Equals -> Done $ RBool $ l == r
+      _ -> Err $ "Not implemented : Binary operation " ++ show op
+    (RString l, RString r) -> case op of
+      Add -> Done $ RString $ l ++ r
+      Equals -> Done $ RBool $ l == r
       _ -> Err $ "Not implemented : Binary operation " ++ show op
     _ -> Err $ "Invalid operands ( " ++ show lvalue ++ ", " ++ show rvalue ++ " ) for operation " ++ show op
 eval _ (Lit l) = return $ case l of
